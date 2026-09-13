@@ -37,6 +37,15 @@ const (
 	TokenValidationUnavailable
 )
 
+const (
+	tokenValidationInterval     = 5 * time.Minute
+	tokenValidationRetryBackoff = time.Minute
+)
+
+var tokenValidationNow = func() int64 {
+	return time.Now().Unix()
+}
+
 func AuthRequired(c *gin.Context) {
 	session := sessions.Default(c)
 	token, tokenOK := session.Get("access_token").(string)
@@ -228,12 +237,15 @@ func TokenValidation(c *gin.Context) {
 		return
 	}
 
-	// Check last validation time (validate every 5 minutes)
+	// Check last validation time (validate every 5 minutes), and avoid retrying
+	// every request while GitHub is temporarily unavailable.
 	lastValidation, _ := session.Get("token_validated_at").(int64)
-	now := time.Now().Unix()
+	retryAt, _ := session.Get("token_validation_retry_at").(int64)
+	now := tokenValidationNow()
 
-	// Validate token every 5 minutes
-	if now-lastValidation > 300 {
+	// Validate the token every 5 minutes, unless the previous validation failed
+	// transiently and its retry backoff has not elapsed yet.
+	if now-lastValidation > int64(tokenValidationInterval/time.Second) && now >= retryAt {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer cancel()
 
@@ -256,15 +268,20 @@ func TokenValidation(c *gin.Context) {
 		}
 		if validationResult == TokenValidationUnavailable {
 			// A GitHub/API/network outage is not evidence that the token was
-			// revoked. Keep the session, leave the timestamp unchanged, and
-			// retry on the next request after the validation interval.
+			// revoked. Keep the successful validation timestamp unchanged, but
+			// throttle retries while the service is unavailable.
 			slog.Warn("Keeping GitHub session after transient token validation failure")
+			session.Set("token_validation_retry_at", now+int64(tokenValidationRetryBackoff/time.Second))
+			if err := session.Save(); err != nil {
+				slog.Error("Failed to persist token validation retry time", "error", err)
+			}
 			c.Next()
 			return
 		}
 
-		// Update validation timestamp
+		// Update validation timestamp and clear any transient-failure backoff.
 		session.Set("token_validated_at", now)
+		session.Delete("token_validation_retry_at")
 		if err := session.Save(); err != nil {
 			slog.Error("Failed to persist token validation time", "error", err)
 		}

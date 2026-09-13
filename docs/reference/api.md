@@ -11,7 +11,7 @@ HomeCMSのREST API仕様です。
 
 GitHub OAuthでログイン後、セッションCookieが発行されます。
 
-`TokenValidation`は5分以上検証していないsessionに対してGitHub API `/user`を再検証します。`200`では検証時刻を更新し、`401 Unauthorized`だけをtoken invalidとしてsessionを失効させます。`403`、`429`、`5xx`、timeout/DNS/TLSなどのtransport errorはGitHubまたはネットワークの一時障害とみなし、sessionを維持して検証時刻を更新しません。次のrequestで再試行されるため、一時障害だけでlogoutされることはありません。
+`TokenValidation`は5分以上検証していないsessionに対してGitHub API `/user`を再検証します。`200`では検証時刻を更新し、`401 Unauthorized`だけをtoken invalidとしてsessionを失効させます。`403`、`429`、`5xx`、timeout/DNS/TLSなどのtransport errorはGitHubまたはネットワークの一時障害とみなし、sessionを維持して検証時刻を更新しません。unavailable時は`token_validation_retry_at`に60秒のbackoffを記録し、その間のrequestでは再検証しません。backoff後に再試行されるため、一時障害だけでlogoutされることはありません。
 
 ### CSRF保護
 

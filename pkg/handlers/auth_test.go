@@ -48,8 +48,9 @@ func tokenValidationRouter() *gin.Engine {
 	router.GET("/session-state", func(c *gin.Context) {
 		session := sessions.Default(c)
 		c.JSON(http.StatusOK, gin.H{
-			"access_token":       session.Get("access_token"),
-			"token_validated_at": session.Get("token_validated_at"),
+			"access_token":              session.Get("access_token"),
+			"token_validated_at":        session.Get("token_validated_at"),
+			"token_validation_retry_at": session.Get("token_validation_retry_at"),
 		})
 	})
 	return router
@@ -247,15 +248,25 @@ func TestTokenValidationKeepsSessionOnTransientFailure(t *testing.T) {
 		"github_user":        "octocat",
 		"token_validated_at": oldValidation,
 	})
+	validationCalls := 0
 	useAuthHTTPClient(t, func(*http.Request) (*http.Response, error) {
+		validationCalls++
 		return githubValidationResponse(http.StatusServiceUnavailable), nil
 	})
 
-	recorder := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", cookie)
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("TokenValidation transient status = %d, want %d", recorder.Code, http.StatusNoContent)
+	first := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", cookie)
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("TokenValidation transient status = %d, want %d", first.Code, http.StatusNoContent)
 	}
-	stateRecorder := requestWithCookie(t, router, http.MethodGet, "/session-state", cookie)
+	updatedCookie := firstResponseCookie(t, first)
+	second := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", updatedCookie)
+	if second.Code != http.StatusNoContent {
+		t.Fatalf("TokenValidation backoff status = %d, want %d", second.Code, http.StatusNoContent)
+	}
+	if validationCalls != 1 {
+		t.Fatalf("token validation calls during backoff = %d, want 1", validationCalls)
+	}
+	stateRecorder := requestWithCookie(t, router, http.MethodGet, "/session-state", updatedCookie)
 	var state map[string]interface{}
 	if err := json.Unmarshal(stateRecorder.Body.Bytes(), &state); err != nil {
 		t.Fatalf("decode session state: %v", err)
@@ -266,10 +277,17 @@ func TestTokenValidationKeepsSessionOnTransientFailure(t *testing.T) {
 	if got := int64(state["token_validated_at"].(float64)); got != oldValidation {
 		t.Fatalf("token_validated_at after transient failure = %d, want unchanged %d", got, oldValidation)
 	}
+	if got := int64(state["token_validation_retry_at"].(float64)); got <= time.Now().Unix() {
+		t.Fatalf("token_validation_retry_at = %d, want future timestamp", got)
+	}
 }
 
 func TestTokenValidationUpdatesTimestampAfterTransientRecovery(t *testing.T) {
-	oldValidation := time.Now().Unix() - 301
+	validationNow := time.Now().Unix()
+	originalNow := tokenValidationNow
+	tokenValidationNow = func() int64 { return validationNow }
+	t.Cleanup(func() { tokenValidationNow = originalNow })
+	oldValidation := validationNow - 301
 	router := tokenValidationRouter()
 	cookie := sessionCookie(t, router, map[string]interface{}{
 		"access_token":       "token",
@@ -290,7 +308,9 @@ func TestTokenValidationUpdatesTimestampAfterTransientRecovery(t *testing.T) {
 	if first.Code != http.StatusNoContent {
 		t.Fatalf("first TokenValidation status = %d, want %d", first.Code, http.StatusNoContent)
 	}
-	second := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", cookie)
+	validationNow += int64(tokenValidationRetryBackoff / time.Second)
+	firstCookie := firstResponseCookie(t, first)
+	second := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", firstCookie)
 	if second.Code != http.StatusNoContent {
 		t.Fatalf("recovered TokenValidation status = %d, want %d", second.Code, http.StatusNoContent)
 	}
@@ -302,6 +322,86 @@ func TestTokenValidationUpdatesTimestampAfterTransientRecovery(t *testing.T) {
 	}
 	if got := int64(state["token_validated_at"].(float64)); got <= oldValidation {
 		t.Fatalf("token_validated_at after recovery = %d, want greater than %d", got, oldValidation)
+	}
+	if state["token_validation_retry_at"] != nil {
+		t.Fatalf("token_validation_retry_at after recovery = %#v, want nil", state["token_validation_retry_at"])
+	}
+}
+
+func TestTokenValidationBackoffRetriesAndClearsOnInvalidToken(t *testing.T) {
+	validationNow := time.Now().Unix()
+	originalNow := tokenValidationNow
+	tokenValidationNow = func() int64 { return validationNow }
+	t.Cleanup(func() { tokenValidationNow = originalNow })
+
+	router := tokenValidationRouter()
+	cookie := sessionCookie(t, router, map[string]interface{}{
+		"access_token":       "token",
+		"github_user":        "octocat",
+		"token_validated_at": validationNow - 301,
+	})
+	responses := []*http.Response{
+		githubValidationResponse(http.StatusServiceUnavailable),
+		githubValidationResponse(http.StatusServiceUnavailable),
+		githubValidationResponse(http.StatusUnauthorized),
+	}
+	validationCalls := 0
+	useAuthHTTPClient(t, func(*http.Request) (*http.Response, error) {
+		validationCalls++
+		response := responses[0]
+		responses = responses[1:]
+		return response, nil
+	})
+
+	first := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", cookie)
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first transient status = %d, want %d", first.Code, http.StatusNoContent)
+	}
+	firstCookie := firstResponseCookie(t, first)
+
+	second := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", firstCookie)
+	if second.Code != http.StatusNoContent {
+		t.Fatalf("immediate retry status = %d, want %d", second.Code, http.StatusNoContent)
+	}
+	if validationCalls != 1 {
+		t.Fatalf("validation calls before backoff = %d, want 1", validationCalls)
+	}
+
+	validationNow += int64(tokenValidationRetryBackoff / time.Second)
+	third := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", firstCookie)
+	if third.Code != http.StatusNoContent {
+		t.Fatalf("backoff retry status = %d, want %d", third.Code, http.StatusNoContent)
+	}
+	if validationCalls != 2 {
+		t.Fatalf("validation calls after backoff = %d, want 2", validationCalls)
+	}
+	secondCookie := firstResponseCookie(t, third)
+
+	fourth := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", secondCookie)
+	if fourth.Code != http.StatusNoContent {
+		t.Fatalf("second backoff status = %d, want %d", fourth.Code, http.StatusNoContent)
+	}
+	if validationCalls != 2 {
+		t.Fatalf("validation calls during second backoff = %d, want 2", validationCalls)
+	}
+
+	validationNow += int64(tokenValidationRetryBackoff / time.Second)
+	fifth := requestWithCookie(t, router, http.MethodGet, "/admin/api/protected", secondCookie)
+	if fifth.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid token after backoff status = %d, want %d", fifth.Code, http.StatusUnauthorized)
+	}
+	if validationCalls != 3 {
+		t.Fatalf("validation calls after invalidation = %d, want 3", validationCalls)
+	}
+
+	clearedCookie := firstResponseCookie(t, fifth)
+	stateRecorder := requestWithCookie(t, router, http.MethodGet, "/session-state", clearedCookie)
+	var state map[string]interface{}
+	if err := json.Unmarshal(stateRecorder.Body.Bytes(), &state); err != nil {
+		t.Fatalf("decode cleared session state: %v", err)
+	}
+	if state["access_token"] != nil {
+		t.Fatalf("access_token after invalid token = %#v, want nil", state["access_token"])
 	}
 }
 
