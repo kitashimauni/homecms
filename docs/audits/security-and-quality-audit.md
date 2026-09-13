@@ -1,12 +1,45 @@
 # セキュリティ・品質監査
 
-最終確認日: 2026-07-06
+最終確認日: 2026-09-13
 
 ## 概要
 
-HomeCMSの認証、記事編集、メディア管理、Git連携、Hugoプレビュー、および開発・デプロイ手順を確認した結果をまとめる。
+HomeCMSの認証、記事編集、メディア管理、Git連携、Local Live Preview、および開発・デプロイ手順を確認した結果をまとめる。過去の指摘は、発見時の影響・推奨対応を履歴として残し、現在の実装状態と残余リスクを分離して記録する。
 
-初回監査では、特に認可、SSHリモート利用時のGit認証、メディアパス検証を本番運用前の必須対応として確認した。各項目の現在の対応状態は以下に記録する。
+初回監査では、特に認可、SSHリモート利用時のGit認証、メディアパス検証を本番運用前の必須対応として確認した。今回の再監査では、マルチサイト境界、generator-neutralなLocal Preview、shadow workspace、ブラウザ所有権の廃止、scheduled refresh、プロセスツリー停止、CI race detectorを追加確認した。
+
+## 現行アーキテクチャの再監査結果
+
+### 認証・セッション
+
+- `SESSION_SECRET`はRelease modeで必須かつ32文字以上であり、cookie storeには認証用キーと暗号化用キーを別々に導出して渡す。
+- セッションcookieは`HttpOnly`、`SameSite=Lax`、HTTPS時の`Secure`を設定する。GitHub tokenは暗号化cookie内に保存されるため、サーバー側セッションストアへの移行は残余リスクとして扱う。
+- `TokenValidation`は一定間隔でGitHub `/user`を再検証し、明確な401だけでセッションを失効する。403、429、5xx、timeout/DNS/TLSなどは一時障害として扱い、retry backoff後に再試行する（Issue #84）。
+
+### Local Live Previewの信頼境界
+
+- preview hostnameはCMSのsession middlewareより前に処理するが、wildcard DNSとHost validationは閲覧者認可ではない。外部ingressではprivate networkまたは独立したviewer authenticationを必須とし、CMS session cookieをpreview subdomainへ共有しない。
+- `/__homecms_ready`、`/__homecms_metadata`、`/__homecms_invalidate`（legacy pathを含む）は外部preview hostnameから404にし、loopback上のgenerator wrapperとの制御経路に限定する。
+- 未保存内容はproduction working tree/Git indexではなく、site-scopedなshadow workspaceへ同期する。generatorへ渡す環境変数はallowlist境界で扱い、CMS OAuth/session/provider secretを継承させない。workspaceのtransition中や再構築失敗は503で扱う。一方、workspace manager自体が利用できない場合は保存済みrepoへフォールバックする実装が残っているため、ログ監視とfail-closed化を残余リスクとする。
+- iframeは別originのpreview URL、`sandbox`、`referrerpolicy=no-referrer`を使用する。ただし現行テンプレートは`allow-same-origin`、`allow-modals`、`allow-popups`を許可しているため、テーマ由来JavaScriptと外部viewer認証画面の影響は残余リスクであり、CSPと許可トークンの最小化を今後の課題とする。
+
+### 並行性・マルチサイト・プロセス終了
+
+- APIは`?site=`または`X-CMS-Site`で対象siteを明示し、記事、preview、deployment、workspace、runtime stateをsite単位で分離する（Issue #83/#85/#86）。ブラウザtabをruntimeの所有者とは扱わず、同一siteの複数tabは同じshadow workspaceへ収束させる。
+- article switch、Git Sync、production save、Local Preview updateは、古いrequestの結果をcommitしない世代管理とin-flight待機を共通化する。scheduled refreshはworkspaceをdetach/deleteせずgenerator processだけを再起動する。
+- Unix系では独立process groupを、WindowsではJob Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）を使い、wrapper配下のgeneratorもStop、idle cleanup、Git Sync reset、shutdownから同じ停止契約で終了させる。WindowsではJob割当まで子生成を抑止するためプロセスを一時停止して起動する。
+
+### 品質・運用
+
+- Frontend testはUI state、Local Preview、editor state/workflow、site-scoped APIに分割し、fake browser/storage harnessを共有する。generator-neutralな重複ケースを増やさず、Hugo/Eleventy固有のfixture・integration testは維持する（Issue #78のfrontend側を先行対応）。Go Local Preview fixtureの共通化とprocess-wide global config mutation削減は継続課題とする。
+- CIは通常の`go test`、`go vet`、build、JavaScript testに加えて、Linux上の独立した`go test -race ./...` jobを実行する（Issue #87）。
+- Dockerはloopback公開、非root runtime、`HOMECMS_REPOS`明示allowlist、secret-freeな`tool-bootstrap`を維持する。
+
+### 残余リスクと今後の作業
+
+- Cookie storeからサーバー側session ID方式への移行、preview iframeのsandbox/CSP許可範囲縮小、実際のwildcard ingress + 外部viewer authenticationを使った受入確認は未完了。
+- race detectorはLinux CIで実行するため、Windows固有のJob Object実行時挙動はWindows CIまたは実機で追加確認する。現時点ではWindows専用ビルドとJob Objectテストを用意している。
+- 本文・設定・外部サービスに依存するgenerator固有の挙動は、Hugo/Eleventy双方の実fixtureを更新した際に再検証する。
 
 ## 優先度: 重大
 
@@ -60,16 +93,16 @@ HomeCMSの認証、記事編集、メディア管理、Git連携、Hugoプレビ
   - シンボリックリンクを含め、実パスが許可ルート内にあることを確認する。
   - 正常系、`../`、絶対パス、Windows形式パス、シンボリックリンクのテストを追加する。
 
-### 4. GitHubアクセストークンがCookie内で暗号化されていない
+### 4. GitHubアクセストークンをCookieへ保存している
 
-- 状態: 対応済み（暗号化Cookie。サーバー側セッションストアへの移行は将来改善）
+- 状態: 暗号化Cookieで対応済み。サーバー側セッションストアへの移行は残余リスク
 - 該当箇所:
   - `main.go` のCookie Store初期化
   - `pkg/handlers/auth.go` の`access_token`保存
-- 影響:
-  - Cookie Storeへ認証鍵だけを渡しているため、Cookieは署名されるが暗号化されない。
-  - Cookieが漏えい・取得された場合、CMSセッションだけでなくGitHub OAuthトークン自体も露出し、トークンに許可された他リポジトリまで影響が広がる。
-  - READMEと設定ガイドの「セッション暗号化キー」という説明と実装が一致していない。
+- 当時の影響:
+  - 以前はCookie Storeへ認証鍵だけを渡していたため、Cookieが署名のみで、Cookie漏えい時にGitHub OAuth tokenが露出する可能性があった。
+- 現在の緩和:
+  - `main.go`はsecretから認証用SHA-512キーと暗号化用SHA-256キーを独立導出し、`cookie.NewStore(authKey[:], encryptionKey[:])`へ渡す。
 - 推奨対応:
   - サーバー側セッションストアへ移行し、CookieにはランダムなセッションIDだけを保存する。
   - Cookie Storeを継続する場合は、署名鍵と独立したAES暗号化鍵を設定する。
@@ -115,20 +148,21 @@ HomeCMSの認証、記事編集、メディア管理、Git連携、Hugoプレビ
   - Hugoが扱うJSON Front Matterと本文の境界を正しく解析・生成する。
   - YAML、TOML、JSONすべてについて、読み込み後の保存で本文が保持されるラウンドトリップテストを追加する。
 
-### 8. Hugoプレビューと管理画面が同一オリジンである
+### 8. Hugo/Eleventyプレビューと管理画面の信頼境界
 
-- 状態: 対応済み（別オリジンへの分離は将来改善）
+- 状態: preview ingressとCMS管理画面を別originへ分離済み。iframeの許可範囲は残余リスク
 - 該当箇所:
   - `main.go` のHugoリバースプロキシ
   - `templates/index.html` のプレビューiframe
 - 影響:
-  - iframeに`sandbox`がなく、HugoテーマやレイアウトのJavaScriptは管理画面と同一オリジンで実行される。
-  - 同期したリポジトリに悪意あるJavaScriptが含まれる場合、CSRFトークンを取得し、ログインユーザー権限でCMS APIを操作できる。
-- 推奨対応:
-  - プレビューを管理画面とは異なるオリジンへ分離する。
-  - 分離できない場合はiframeの`sandbox`と厳格なContent Security Policyを導入する。ただし、必要なプレビュー機能との互換性を検証する。
-  - 現在はiframeを`sandbox="allow-forms allow-scripts"`でopaque originとして扱い、`allow-same-origin`、トップレベル遷移、ポップアップを許可していない。
-  - プレビューへの直接アクセスにも管理画面と同じ認証・トークン再検証を適用している。
+  - preview側のテーマJavaScriptはCMS管理画面と別originで実行されるが、preview ingressのviewer authenticationが未設定ならURLの知識だけで閲覧できる。
+  - 現行iframeは`sandbox`を付けているものの、generator互換性のため`allow-same-origin`、`allow-modals`、`allow-popups`を許可している。
+- 現在の緩和:
+  - `LocalPreviewIngress`はCMS session middlewareより前にpreview hostnameを処理し、CMS cookieをpreview subdomainへ共有しない。
+  - wildcard DNS/Host validationを認可とみなさず、external ingressへprivate networkまたはCloudflare Access等の独立viewer authenticationを要求する。
+  - control pathは外部hostnameから遮断し、loopback wrapperとの内部通信に限定する。
+- 残余リスク/推奨対応:
+  - iframe sandbox/CSPの許可範囲を実サイトで検証し、必要最小限まで縮小する。viewer authenticationを必ずpreview ingressへ設定する。
 
 ## 優先度: 中
 
@@ -192,8 +226,8 @@ HomeCMSの認証、記事編集、メディア管理、Git連携、Hugoプレビ
 
 - 記事取得APIのパスをフロントエンド側でURLエンコードしていないため、`&`、`#`、`?`などを含むファイル名を正しく扱えない。（対応済み）
 - Git statusのporcelain出力を文字列操作で解析しており、リネームや引用された日本語ファイル名のdirty判定を誤る可能性がある。（`--porcelain=v1 -z`の解析へ変更済み）
-- 複数タブや並行リクエスト間の更新競合を検出するバージョン番号・ETag・排他制御がなく、後勝ちで記事を上書きする。
-- 複数のGoファイルが`gofmt`未適用である。
+- 同一siteの複数tabでの更新はsite-scoped shadow workspaceへlast-write-winsで収束する。厳密な編集者単位の競合解決は将来改善とする。
+- Windows固有のJob Object動作はWindows CI/実機で追加検証する。
 
 ## 検証結果
 
@@ -203,6 +237,7 @@ HomeCMSの認証、記事編集、メディア管理、Git連携、Hugoプレビ
 - `go vet ./...`
 - `go build -buildvcs=false .`
 - JavaScriptファイルの構文検査
+- Linux CIで`go test -race ./...`
 
 テストカバレッジ:
 
@@ -210,10 +245,10 @@ HomeCMSの認証、記事編集、メディア管理、Git連携、Hugoプレビ
 - `pkg/services`: 11.8%
 - `main`、`pkg/config`: 0%
 
-完走できなかった検査:
+ローカルで完走できなかった検査:
 
 - `go test -race ./...`
-  - Windows環境にCコンパイラがなく、race detectorを有効化できなかった。
+  - Windows環境ではrace detectorの実行条件を満たさないため、Linux CIのrace jobで実行する。
 - `staticcheck ./...`
   - インストール済みのstaticcheckがGo 1.24の解析中にpanicした。
 

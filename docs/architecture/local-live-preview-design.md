@@ -83,7 +83,7 @@ stopped -> starting -> ready -> stopping -> stopped
 - child environmentはgenerator allowlistのみ
 - CMS shutdown開始後は新規lazy startを拒否
 - HTTP server drain後にchild processを停止
-- Unix/Linuxではgeneratorを独立process groupで起動し、wrapper配下も`SIGTERM`→grace period→`SIGKILL`の順で停止
+- Unix/Linuxではgeneratorを独立process groupで、WindowsではJob Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）で起動し、wrapper配下もgraceful stop→grace period→forced terminationの順で停止
 - process tree終了と`cmd.Wait()`を確認してからlifecycle slotをreleaseし、timeout時はPID/process groupを診断ログへ残す
 - 通常siteは異常終了後に次requestで再起動可能
 - `always_on: true`のsiteはCMS起動後にbackground supervisorがprewarmし、異常終了をbounded exponential backoffで再起動

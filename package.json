@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "npm run test:js",
-    "test:js": "node --test static/js/*.test.mjs scripts/*.test.cjs"
+    "test:js": "node --test --test-concurrency=1 static/js/*.test.mjs scripts/*.test.cjs"
   }
 }

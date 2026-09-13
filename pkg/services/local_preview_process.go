@@ -24,7 +24,7 @@ func terminateManagedLocalPreviewProcess(ctx context.Context, siteID string, pro
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if process.exited() && !localPreviewProcessTreeAlive(process.cmd) {
+	if process.exited() && !localPreviewProcessTreeAlive(process.cmd, process.tree) {
 		cancelProcessContext(process)
 		return nil
 	}
@@ -41,11 +41,11 @@ func terminateManagedLocalPreviewProcess(ctx context.Context, siteID string, pro
 		}
 	}
 
-	gracefulErr := signalLocalPreviewProcess(process.cmd, false)
+	gracefulErr := signalLocalPreviewProcess(process.cmd, process.tree, false)
 	if gracefulErr != nil && !process.exited() {
 		slog.Warn("Failed to send graceful Local Live Preview stop signal",
 			"site", siteID,
-			"process", localPreviewProcessDescription(process.cmd),
+			"process", localPreviewProcessDescription(process.cmd, process.tree),
 			"error", gracefulErr,
 		)
 	}
@@ -55,11 +55,11 @@ func terminateManagedLocalPreviewProcess(ctx context.Context, siteID string, pro
 		return nil
 	}
 
-	forceErr := signalLocalPreviewProcess(process.cmd, true)
+	forceErr := signalLocalPreviewProcess(process.cmd, process.tree, true)
 	if forceErr != nil && !process.exited() {
 		slog.Warn("Failed to send forced Local Live Preview stop signal",
 			"site", siteID,
-			"process", localPreviewProcessDescription(process.cmd),
+			"process", localPreviewProcessDescription(process.cmd, process.tree),
 			"error", forceErr,
 		)
 	}
@@ -70,7 +70,7 @@ func terminateManagedLocalPreviewProcess(ctx context.Context, siteID string, pro
 	}
 
 	cancelProcessContext(process)
-	description := localPreviewProcessDescription(process.cmd)
+	description := localPreviewProcessDescription(process.cmd, process.tree)
 	if forceErr != nil {
 		err := fmt.Errorf("local preview process tree did not terminate for site %q (%s): %w", siteID, description, forceErr)
 		slog.Error("Local preview process tree termination timed out", "site", siteID, "process", description, "error", err)
@@ -86,21 +86,21 @@ func waitForLocalPreviewProcessTree(ctx context.Context, process *managedLocalPr
 		ctx = context.Background()
 	}
 	if timeout <= 0 {
-		return process.exited() && !localPreviewProcessTreeAlive(process.cmd)
+		return process.exited() && !localPreviewProcessTreeAlive(process.cmd, process.tree)
 	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	for {
-		if process.exited() && !localPreviewProcessTreeAlive(process.cmd) {
+		if process.exited() && !localPreviewProcessTreeAlive(process.cmd, process.tree) {
 			return true
 		}
 		select {
 		case <-ctx.Done():
 			return false
 		case <-deadline.C:
-			return process.exited() && !localPreviewProcessTreeAlive(process.cmd)
+			return process.exited() && !localPreviewProcessTreeAlive(process.cmd, process.tree)
 		case <-ticker.C:
 		}
 	}

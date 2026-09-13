@@ -8,6 +8,16 @@ import (
 	"syscall"
 )
 
+type localPreviewProcessTree struct{}
+
+func attachLocalPreviewProcessTree(_ *exec.Cmd) (*localPreviewProcessTree, error) {
+	return &localPreviewProcessTree{}, nil
+}
+
+func closeLocalPreviewProcessTree(_ *localPreviewProcessTree) error {
+	return nil
+}
+
 func configureLocalPreviewCommand(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -16,7 +26,7 @@ func configureLocalPreviewCommand(cmd *exec.Cmd) {
 	cmd.WaitDelay = localPreviewProcessWaitDelay
 }
 
-func signalLocalPreviewProcess(cmd *exec.Cmd, force bool) error {
+func signalLocalPreviewProcess(cmd *exec.Cmd, _ *localPreviewProcessTree, force bool) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
@@ -30,7 +40,7 @@ func signalLocalPreviewProcess(cmd *exec.Cmd, force bool) error {
 	return nil
 }
 
-func localPreviewProcessTreeAlive(cmd *exec.Cmd) bool {
+func localPreviewProcessTreeAlive(cmd *exec.Cmd, _ *localPreviewProcessTree) bool {
 	if cmd == nil || cmd.Process == nil {
 		return false
 	}
@@ -38,7 +48,7 @@ func localPreviewProcessTreeAlive(cmd *exec.Cmd) bool {
 	return err == nil || err == syscall.EPERM
 }
 
-func localPreviewProcessDescription(cmd *exec.Cmd) string {
+func localPreviewProcessDescription(cmd *exec.Cmd, _ *localPreviewProcessTree) string {
 	if cmd == nil || cmd.Process == nil {
 		return "pid=unknown process_group=unknown"
 	}

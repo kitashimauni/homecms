@@ -44,6 +44,36 @@ jobs:
       - name: Frontend test
         run: npm run test:js
 
+  race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go race test
+        run: go test -race ./...
+
+  windows-process-tree:
+    name: Windows Local Preview process tree
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test Windows process tree termination
+        run: go test ./pkg/services -run TestWindowsLocalPreviewProcessTree -count=1
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
