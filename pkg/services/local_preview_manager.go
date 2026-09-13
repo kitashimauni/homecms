@@ -63,6 +63,7 @@ type localPreviewProcessTerminator func(context.Context, string, *managedLocalPr
 
 type managedLocalPreviewProcess struct {
 	cmd         *exec.Cmd
+	tree        *localPreviewProcessTree
 	cancel      context.CancelFunc
 	done        chan struct{} // process termination; closed before cleanup starts
 	cleanupDone chan struct{}
@@ -127,6 +128,13 @@ func (p *managedLocalPreviewProcess) finishCleanup(siteID string) {
 	var err error
 	if p.cleanup != nil {
 		err = p.cleanup()
+	}
+	if treeErr := closeLocalPreviewProcessTree(p.tree); treeErr != nil {
+		if err == nil {
+			err = treeErr
+		} else {
+			err = errors.Join(err, treeErr)
+		}
 	}
 	p.setCleanupErr(err)
 	close(p.cleanupDone)
@@ -541,9 +549,20 @@ func (m *LocalPreviewManager) startProcess(_ context.Context, runtime config.Sit
 		}
 		return nil, err
 	}
+	tree, err := attachLocalPreviewProcessTree(cmd)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		cancel()
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			slog.Error("Local preview cleanup failed after process tree setup error", "site", runtime.ID, "error", cleanupErr)
+		}
+		return nil, fmt.Errorf("attach local preview process tree: %w", err)
+	}
 
 	process := &managedLocalPreviewProcess{
 		cmd:         cmd,
+		tree:        tree,
 		cancel:      cancel,
 		done:        make(chan struct{}),
 		cleanupDone: make(chan struct{}),

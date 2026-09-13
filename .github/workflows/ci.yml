@@ -44,6 +44,21 @@ jobs:
       - name: Frontend test
         run: npm run test:js
 
+  race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go race test
+        run: go test -race ./...
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
