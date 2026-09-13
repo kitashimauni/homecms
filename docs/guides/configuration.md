@@ -438,6 +438,8 @@ GIT_USER_EMAIL="bot@homecms.local"
 | Hugo新規コンテンツ | 60秒 | `hugo new` コマンド |
 | GitHubトークン検証 | 5分 | 定期的なトークン有効性確認 |
 
+GitHubトークン検証は状態を`valid`、`invalid`、`unavailable`に分けます。GitHub APIが`401`を返した場合だけsessionを失効し、`403`、`429`、`5xx`、timeout/DNS/TLSなどの一時障害ではsessionを維持して検証時刻を更新しません。再検証不能はtoken invalidの証拠ではないため、GitHubから明確なinvalid応答を受けるまで再試行します。
+
 Local Live PreviewのEleventy初回buildとwatch rebuild後のmetadata URL解決の待機上限はデフォルト2分です。重いsiteでは`HOMECMS_LOCAL_PREVIEW_STARTUP_TIMEOUT=5m`のようにGoのduration形式で変更できます。Eleventyの初回build失敗時は同じbuildを自動再試行しません。
 
 `HOMECMS_*`が標準の設定名です。既存環境向けに`HUGO_CMS_*`（`UID`、`GID`、`HOST_PORT`、`REPOS`、Local Live Previewのtimeout）はフォールバックとして利用できますが、標準名が設定されている場合は標準名を優先し、旧名の利用時はdeprecated warningを記録します。

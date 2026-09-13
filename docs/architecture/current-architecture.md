@@ -292,6 +292,8 @@ type Collection struct {
 5. /admin へリダイレクト
 ```
 
+`TokenValidation`は5分ごとにGitHub API `/user`を再検証する。`200`は検証時刻を更新し、`401`だけを明確なtoken invalidとしてsessionを失効する。`403`、`429`、`5xx`、timeout/DNS/TLSなどのtransport failureは`unavailable`としてwarningを記録し、検証時刻を更新せず次回requestで再試行する。GitHubの一時障害だけでユーザーをlogoutしない。
+
 ### CSRF保護
 
 ```
