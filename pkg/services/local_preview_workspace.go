@@ -88,6 +88,7 @@ type LocalPreviewWorkspaceManager struct {
 	mu              sync.Mutex
 	workspaces      map[string]LocalPreviewWorkspace
 	activities      map[string]time.Time
+	rebuildRequired map[string]bool
 	siteGates       map[string]*sync.RWMutex
 	generations     map[string]uint64
 	cleanupActive   map[string]bool
@@ -112,6 +113,7 @@ func NewLocalPreviewWorkspaceManager(root string) (*LocalPreviewWorkspaceManager
 		root:            absRoot,
 		workspaces:      make(map[string]LocalPreviewWorkspace),
 		activities:      make(map[string]time.Time),
+		rebuildRequired: make(map[string]bool),
 		siteGates:       make(map[string]*sync.RWMutex),
 		generations:     make(map[string]uint64),
 		cleanupActive:   make(map[string]bool),
@@ -351,6 +353,46 @@ func (m *LocalPreviewWorkspaceManager) Active(siteID string) (LocalPreviewWorksp
 	return m.Status(siteID)
 }
 
+// MarkRebuildRequired records that the shadow workspace may no longer
+// represent production after an auxiliary resource sync failed. The next
+// preview recovery must detach it and recreate it from the production tree.
+func (m *LocalPreviewWorkspaceManager) MarkRebuildRequired(siteID string) {
+	siteID = strings.TrimSpace(siteID)
+	if m == nil || siteID == "" {
+		return
+	}
+	m.mu.Lock()
+	if !m.closed {
+		m.rebuildRequired[siteID] = true
+	}
+	m.mu.Unlock()
+}
+
+// RebuildRequired reports whether the site's shadow workspace requires a full
+// production-based rebuild before it is used again.
+func (m *LocalPreviewWorkspaceManager) RebuildRequired(siteID string) bool {
+	siteID = strings.TrimSpace(siteID)
+	if m == nil || siteID == "" {
+		return false
+	}
+	m.mu.Lock()
+	required := m.rebuildRequired[siteID]
+	m.mu.Unlock()
+	return required
+}
+
+// ClearRebuildRequired is called only after a full reset has detached the
+// possibly stale workspace successfully.
+func (m *LocalPreviewWorkspaceManager) ClearRebuildRequired(siteID string) {
+	siteID = strings.TrimSpace(siteID)
+	if m == nil || siteID == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.rebuildRequired, siteID)
+	m.mu.Unlock()
+}
+
 // IdleSites returns site runtimes with no recent preview activity. It includes
 // runtimes that only served saved content and therefore have no workspace yet.
 func (m *LocalPreviewWorkspaceManager) IdleSites(timeout time.Duration) []string {
@@ -558,6 +600,7 @@ func (m *LocalPreviewWorkspaceManager) Shutdown() error {
 	m.closed = true
 	m.workspaces = make(map[string]LocalPreviewWorkspace)
 	m.activities = make(map[string]time.Time)
+	m.rebuildRequired = make(map[string]bool)
 	root := m.root
 	m.mu.Unlock()
 	if err := os.RemoveAll(root); err != nil {

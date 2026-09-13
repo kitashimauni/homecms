@@ -213,6 +213,8 @@ browserはdocumentごとの単調増加`revision`を送る。
 
 static配下はHugoが元repositoryを直接参照するためshadow同期しない。static resource変更がURL mapに影響しない場合でも、Eleventyのproduction-linked treeではmetadata invalidation後のwatch rebuildを許可する。記事削除・media upload/deleteはproduction mutationとPreview同期を別の安全境界として扱い、media本体の保存・削除または記事削除が成功した後にpreview-only同期またはinvalidationが失敗した場合、APIを失敗扱いにはせずserver logへ残し、レスポンスの`local_preview_sync: false`で通知する。クライアントはproduction mutationを再試行しない。
 
+preview-only同期が失敗した場合はsite単位の`workspace_rebuild_required`を記録する。次のPreview ingress、記事URL解決、shadow update、またはalways-on supervisorの起動・scheduled recoveryは、既存のgenerator processとshadow workspaceを`ResetRuntime`でdetachし、production repository treeからworkspaceを再生成してから処理を続ける。resetが失敗している間は状態を解除せず、status APIで診断できる。これにより、scheduled refreshがprocessだけを再起動する通常契約でも、同期失敗後だけは古いshadowを保持しない。
+
 ### site runtime activity / cleanup
 
 Local Previewは完全にsite-scopedであり、browser tab ownership、lease、heartbeat、stale reclaimを持たない。同じsiteへの複数tabのupdateは同じshadow workspaceへlast-write-winsで適用する。update、記事URL解決、preview ingress、content resource同期はsite runtimeの`lastActivity`を更新する。

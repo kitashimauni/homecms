@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"hugo-cms/pkg/config"
 	"hugo-cms/pkg/services"
 	"log/slog"
@@ -50,8 +51,16 @@ func localPreviewIngress(manager localPreviewRuntimeProxy) gin.HandlerFunc {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
 			return
 		}
-
 		runtime := config.NewSiteRuntime(site)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), services.DefaultLocalPreviewStopTimeout)
+		if err := services.RecoverLocalPreviewForRuntime(ctx, runtime); err != nil {
+			cancel()
+			slog.Warn("Failed to rebuild Local Live Preview workspace before ingress", "site", site.ID, "error", err)
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+			return
+		}
+		cancel()
+
 		var ingressLease services.LocalPreviewIngressLease
 		// Phase 3 keeps unsaved editor content outside the production working
 		// tree. Eleventy receives the workspace's project-root overlay so config,

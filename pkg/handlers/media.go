@@ -145,6 +145,7 @@ func syncLocalPreviewContentResource(runtime config.SiteRuntime, repoPath string
 		// The media operation already succeeded in the production workspace. Do
 		// not turn a preview-only synchronization failure into a misleading media
 		// retry; log it and let the next workspace rebuild recover the resource.
+		workspaceManager.MarkRebuildRequired(runtime.ID)
 		slog.Warn("Failed to synchronize content resource into Local Live Preview", "site", runtime.ID, "path", repoPath, "error", err)
 		return err
 	}
@@ -163,6 +164,7 @@ func syncLocalPreviewContentResource(runtime config.SiteRuntime, repoPath string
 		articlePath = ""
 	}
 	if err := invalidateLocalPreviewArticleURL(runtime, articlePath); err != nil {
+		workspaceManager.MarkRebuildRequired(runtime.ID)
 		slog.Warn("Failed to invalidate Local Live Preview metadata after media sync", "site", runtime.ID, "path", repoPath, "error", err)
 		return err
 	}

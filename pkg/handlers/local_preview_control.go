@@ -41,13 +41,14 @@ func GetLocalPreviewStatus(c *gin.Context) {
 	}
 
 	response := gin.H{
-		"enabled":          true,
-		"generator":        runtime.Generator,
-		"status":           string(processState),
-		"process_state":    processState,
-		"process_error":    processError,
-		"preview_url":      runtime.LocalPreview.URL,
-		"workspace_active": active,
+		"enabled":                    true,
+		"generator":                  runtime.Generator,
+		"status":                     string(processState),
+		"process_state":              processState,
+		"process_error":              processError,
+		"preview_url":                runtime.LocalPreview.URL,
+		"workspace_active":           active,
+		"workspace_rebuild_required": workspaceManager.RebuildRequired(runtime.ID),
 	}
 	persistent := services.DefaultLocalPreviewManager().PersistentStatus(runtime.ID, runtime.LocalPreview)
 	response["always_on"] = persistent.AlwaysOn

@@ -54,6 +54,14 @@ func navigateLocalPreview(c *gin.Context, dependencies localPreviewNavigationDep
 		ErrorBadRequest(c, "a relative path is required")
 		return
 	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), services.DefaultLocalPreviewStopTimeout)
+	if err := services.RecoverLocalPreviewForRuntime(ctx, runtime); err != nil {
+		cancel()
+		slog.Warn("Failed to rebuild Local Live Preview workspace before navigation", "site", runtime.ID, "error", err)
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+	cancel()
 
 	workspaceManager := dependencies.workspaceManager
 	if workspaceManager == nil {

@@ -324,6 +324,7 @@ CSRFトークンを取得します。
   "status": "ready",
   "process_state": "ready",
   "workspace_active": false,
+  "workspace_rebuild_required": false,
   "always_on": true,
   "supervisor_state": "running",
   "next_refresh_at": "2026-09-13T04:00:00+09:00",
@@ -332,6 +333,8 @@ CSRFトークンを取得します。
 ```
 
 `supervisor_state`は`starting`、`running`、`retrying`、`stopped`、`disabled`のいずれかです。scheduled refreshはworkspaceをdetach/deleteせず、generator processだけをgraceful restartします。
+
+Preview同期に失敗してworkspaceの再構築が必要な場合は`workspace_rebuild_required: true`になります。次回のPreviewアクセスまたは常駐supervisorの復旧で、generatorとshadow workspaceをproduction treeから再生成し、成功時にこの状態を解除します。
 
 ### POST /admin/api/preview/markdown
 

@@ -50,6 +50,14 @@ func UpdateLocalPreviewContent(c *gin.Context) {
 	} else {
 		finalContent = []byte(req.Content)
 	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), services.DefaultLocalPreviewStopTimeout)
+	if err := services.RecoverLocalPreviewForRuntime(ctx, runtime); err != nil {
+		cancel()
+		slog.Warn("Failed to rebuild Local Live Preview workspace before content update", "site", runtime.ID, "error", err)
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+	cancel()
 
 	workspaceManager, err := services.DefaultLocalPreviewWorkspaceManager()
 	if err != nil {

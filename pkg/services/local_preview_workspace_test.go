@@ -354,6 +354,69 @@ func TestLocalPreviewWorkspaceSyncsContentResource(t *testing.T) {
 	}
 }
 
+func TestLocalPreviewWorkspaceRebuildRequiredResetConvergesProduction(t *testing.T) {
+	repo := makeLocalPreviewWorkspaceRepo(t)
+	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
+	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, _, _, err := manager.Update(runtime, "one.md", 1, []byte("unsaved draft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldResource := filepath.Join(repo, "content", "images", "old.png")
+	if err := os.MkdirAll(filepath.Dir(oldResource), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldResource, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SyncContentResource(runtime, filepath.ToSlash(filepath.Join("content", "images", "old.png")), false); err != nil {
+		t.Fatal(err)
+	}
+
+	productionArticle := filepath.Join(repo, "content", "one.md")
+	if err := os.WriteFile(productionArticle, []byte("production after mutation"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(oldResource); err != nil {
+		t.Fatal(err)
+	}
+	newResource := filepath.Join(repo, "content", "images", "new.png")
+	if err := os.WriteFile(newResource, []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.MarkRebuildRequired(runtime.ID)
+	if !manager.RebuildRequired(runtime.ID) {
+		t.Fatal("RebuildRequired() = false after marking workspace degraded")
+	}
+	previewManager := NewLocalPreviewManager(nil)
+	if err := previewManager.ResetRuntime(context.Background(), runtime.ID, manager); err != nil {
+		t.Fatalf("ResetRuntime() error = %v", err)
+	}
+	if manager.RebuildRequired(runtime.ID) {
+		t.Fatal("ResetRuntime() left workspace marked for rebuild")
+	}
+	if _, active := manager.Status(runtime.ID); active {
+		t.Fatal("ResetRuntime() left the stale workspace active")
+	}
+	if _, err := os.Stat(workspace.ContentDir); !os.IsNotExist(err) {
+		t.Fatalf("stale workspace still exists after reset: %v", err)
+	}
+
+	latest, created, applied, err := manager.Update(runtime, "one.md", 2, []byte("production after mutation"))
+	if err != nil || !created || applied {
+		t.Fatalf("post-recovery Update() created=%v applied=%v err=%v", created, applied, err)
+	}
+	assertWorkspaceFileContent(t, filepath.Join(latest.ContentDir, "one.md"), "production after mutation")
+	assertWorkspaceFileContent(t, filepath.Join(latest.ContentDir, "images", "new.png"), "new")
+	if _, err := os.Stat(filepath.Join(latest.ContentDir, "images", "old.png")); !os.IsNotExist(err) {
+		t.Fatalf("deleted production resource remains after recovery: %v", err)
+	}
+}
+
 func TestLocalPreviewWorkspaceIgnoresStaticResourceSync(t *testing.T) {
 	repo := makeLocalPreviewWorkspaceRepo(t)
 	if err := os.MkdirAll(filepath.Join(repo, "static"), 0755); err != nil {

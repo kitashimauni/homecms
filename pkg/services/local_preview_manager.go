@@ -788,6 +788,46 @@ func (m *LocalPreviewManager) ResetRuntime(ctx context.Context, siteID string, w
 		workspaceManager.CancelCleanup(&cleanup)
 		return fmt.Errorf("detach local preview workspace for site %q: %w", siteID, err)
 	}
+	workspaceManager.ClearRebuildRequired(siteID)
+	return nil
+}
+
+func (m *LocalPreviewManager) recoverRequiredWorkspace(ctx context.Context, runtime config.SiteRuntime, workspaceManager *LocalPreviewWorkspaceManager) error {
+	if workspaceManager == nil || !workspaceManager.RebuildRequired(runtime.ID) {
+		return nil
+	}
+	if err := m.ResetRuntime(ctx, runtime.ID, workspaceManager); err != nil {
+		return fmt.Errorf("rebuild local preview workspace for site %q: %w", runtime.ID, err)
+	}
+	m.setManualStop(runtime.ID, false)
+	return nil
+}
+
+// RecoverLocalPreviewForRuntime rebuilds a shadow workspace that may have
+// diverged from production after a best-effort resource synchronization
+// failure. Production mutations remain authoritative; this helper only
+// affects the auxiliary Local Preview state.
+func RecoverLocalPreviewForRuntime(ctx context.Context, runtime config.SiteRuntime) error {
+	if runtime.LocalPreview.Enabled == nil || !*runtime.LocalPreview.Enabled {
+		return nil
+	}
+	workspaceManager, err := DefaultLocalPreviewWorkspaceManager()
+	if err != nil {
+		return fmt.Errorf("local preview workspace is unavailable: %w", err)
+	}
+	if !workspaceManager.RebuildRequired(runtime.ID) {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resetCtx, cancel := context.WithTimeout(ctx, DefaultLocalPreviewStopTimeout)
+	defer cancel()
+	manager := DefaultLocalPreviewManager()
+	if err := manager.ResetRuntime(resetCtx, runtime.ID, workspaceManager); err != nil {
+		return fmt.Errorf("rebuild local preview workspace for site %q: %w", runtime.ID, err)
+	}
+	manager.setManualStop(runtime.ID, false)
 	return nil
 }
 
