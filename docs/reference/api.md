@@ -244,10 +244,12 @@ CSRFトークンを取得します。
 **レスポンス**:
 ```json
 {
-    "status": "ok",
-    "log": "Deleted"
+    "status": "deleted",
+    "local_preview_sync": true
 }
 ```
+
+記事削除はproductionの削除結果を正とし、Local Live Previewの事前metadata invalidationはstale URL防止のために試行します。Previewが停止中またはmetadata invalidation・shadow同期に失敗した場合も記事削除自体は成功し、`local_preview_sync`が`false`になります。`false`の場合はserver logとPreviewの再起動・再同期を確認してください。
 
 ### POST /admin/api/diff
 
@@ -478,9 +480,12 @@ readyになったdraft branchからproduction branchへのPull Requestを作成�
     "path": "/images/image_1704844800.jpg",
     "size": 102400,
     "url": "/admin/api/media/raw?path=static/images/image_1704844800.jpg",
-    "repo_path": "static/images/image_1704844800.jpg"
+    "repo_path": "static/images/image_1704844800.jpg",
+    "local_preview_sync": true
 }
 ```
+
+`local_preview_sync`はproductionへの保存後に行うLocal Live Previewのshadow同期・metadata invalidationの結果です。Preview側の障害だけでアップロードをHTTP 500にはせず、同期に失敗した場合は`false`を返します。
 
 **エラーレスポンス**:
 ```json
@@ -508,9 +513,12 @@ readyになったdraft branchからproduction branchへのPull Requestを作成�
 **レスポンス**:
 ```json
 {
-    "status": "deleted"
+    "status": "deleted",
+    "local_preview_sync": true
 }
 ```
+
+削除もproductionの結果を正とします。Preview同期が失敗した場合は削除を再試行せず、`local_preview_sync: false`を診断情報として扱います。
 
 ### GET /admin/api/media/raw
 

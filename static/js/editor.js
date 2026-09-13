@@ -635,12 +635,16 @@ export async function deleteFile(refreshListCb) {
         // article in the resident workspace.
         await waitForLocalPreviewUpdates();
         assertGitSyncWritesAllowed();
-        await runGitMutation(() => API.deleteArticle(pathToDelete, currentData?.revision || ""));
+        const deleteResponse = await runGitMutation(() => API.deleteArticle(pathToDelete, currentData?.revision || ""));
         // Production deletion is committed at this point. The server removes
         // the corresponding file from the site-scoped preview workspace while
         // keeping the generator runtime alive for the next article.
         deleted = true;
-        UI.showToast("Article deleted", "success");
+        if (deleteResponse?.local_preview_sync === false) {
+            UI.showToast("Article deleted, but Local Live Preview sync failed", "warning");
+        } else {
+            UI.showToast("Article deleted", "success");
+        }
 
         if (currentPath === pathToDelete) {
             cancelMarkdownPreview();

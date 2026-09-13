@@ -63,9 +63,10 @@ func UploadMedia(c *gin.Context) {
 
 	// The generated filename is only known after the upload is accepted, so
 	// establish a root metadata barrier before changing any production resource.
-	if err := services.DefaultLocalPreviewManager().InvalidateArticleURL(runtime); err != nil {
-		ErrorInternal(c, "Failed to prepare Local Live Preview metadata: "+err.Error())
-		return
+	// Preview is an auxiliary consumer, so an unavailable preview must not block
+	// the authoritative production mutation.
+	if err := invalidateLocalPreviewArticleURL(runtime); err != nil {
+		slog.Warn("Failed to prepare Local Live Preview metadata before media upload", "site", runtime.ID, "error", err)
 	}
 
 	info, err := services.SaveMediaFileForRuntime(runtime, file, mode, articlePath)
@@ -77,7 +78,11 @@ func UploadMedia(c *gin.Context) {
 		ErrorInternal(c, "Failed to save file: "+err.Error())
 		return
 	}
-	syncLocalPreviewContentResource(runtime, info.RepoPath, false, true)
+	localPreviewSync := true
+	if err := syncLocalPreviewContentResourceForMutation(runtime, info.RepoPath, false, true); err != nil {
+		localPreviewSync = false
+	}
+	info.LocalPreviewSync = &localPreviewSync
 	info.URL = addSiteQuery(info.URL, runtime.ID)
 
 	c.JSON(http.StatusOK, info)
@@ -108,35 +113,43 @@ func DeleteMedia(c *gin.Context) {
 		return
 	}
 
-	if err := services.DefaultLocalPreviewManager().InvalidateArticleURL(runtime, localPreviewResourcePath(runtime, req.RepoPath)); err != nil {
-		ErrorInternal(c, "Failed to prepare Local Live Preview metadata: "+err.Error())
-		return
+	if err := invalidateLocalPreviewArticleURL(runtime, localPreviewResourcePath(runtime, req.RepoPath)); err != nil {
+		slog.Warn("Failed to prepare Local Live Preview metadata before media deletion", "site", runtime.ID, "path", req.RepoPath, "error", err)
 	}
 
 	if err := services.DeleteMediaFileForRuntime(runtime, req.RepoPath); err != nil {
 		ErrorInternal(c, "Failed to delete: "+err.Error())
 		return
 	}
-	syncLocalPreviewContentResource(runtime, req.RepoPath, true, true)
-	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+	localPreviewSync := true
+	if err := syncLocalPreviewContentResourceForMutation(runtime, req.RepoPath, true, true); err != nil {
+		localPreviewSync = false
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "local_preview_sync": localPreviewSync})
 }
 
-func syncLocalPreviewContentResource(runtime config.SiteRuntime, repoPath string, deleted, invalidateMetadata bool) {
+var invalidateLocalPreviewArticleURL = func(runtime config.SiteRuntime, articlePaths ...string) error {
+	return services.DefaultLocalPreviewManager().InvalidateArticleURL(runtime, articlePaths...)
+}
+
+var syncLocalPreviewContentResourceForMutation = syncLocalPreviewContentResource
+
+func syncLocalPreviewContentResource(runtime config.SiteRuntime, repoPath string, deleted, invalidateMetadata bool) error {
 	workspaceManager, err := services.DefaultLocalPreviewWorkspaceManager()
 	if err != nil {
-		slog.Warn("Local preview workspace unavailable during media sync", "site", runtime.ID, "error", err)
-		return
+		slog.Warn("Local preview workspace unavailable during content resource sync", "site", runtime.ID, "error", err)
+		return err
 	}
 	synced, err := workspaceManager.SyncContentResource(runtime, repoPath, deleted)
 	if err != nil {
 		// The media operation already succeeded in the production workspace. Do
 		// not turn a preview-only synchronization failure into a misleading media
 		// retry; log it and let the next workspace rebuild recover the resource.
-		slog.Warn("Failed to synchronize media into Local Live Preview", "site", runtime.ID, "path", repoPath, "error", err)
-		return
+		slog.Warn("Failed to synchronize content resource into Local Live Preview", "site", runtime.ID, "path", repoPath, "error", err)
+		return err
 	}
 	if !invalidateMetadata {
-		return
+		return nil
 	}
 
 	// Content resources are part of the Eleventy input tree, while static
@@ -149,9 +162,11 @@ func syncLocalPreviewContentResource(runtime config.SiteRuntime, repoPath string
 		// process may still observe a production-linked resource.
 		articlePath = ""
 	}
-	if err := services.DefaultLocalPreviewManager().InvalidateArticleURL(runtime, articlePath); err != nil {
+	if err := invalidateLocalPreviewArticleURL(runtime, articlePath); err != nil {
 		slog.Warn("Failed to invalidate Local Live Preview metadata after media sync", "site", runtime.ID, "path", repoPath, "error", err)
+		return err
 	}
+	return nil
 }
 
 func localPreviewResourcePath(runtime config.SiteRuntime, repoPath string) string {
