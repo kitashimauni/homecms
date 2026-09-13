@@ -11,15 +11,11 @@ import (
 )
 
 func TestLocalPreviewWorkspaceMirrorsAndUpdatesContent(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	repo, manager, runtime := fixture.Repo, fixture.Manager, fixture.Runtime
 	if err := os.WriteFile(filepath.Join(repo, "content", "two.md"), []byte("second"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
 	workspace, created, applied, err := manager.Update(runtime, "one.md", 1, []byte("new"))
 	if err != nil || !created || !applied {
 		t.Fatalf("Update() created=%v applied=%v err=%v", created, applied, err)
@@ -30,12 +26,8 @@ func TestLocalPreviewWorkspaceMirrorsAndUpdatesContent(t *testing.T) {
 }
 
 func TestLocalPreviewWorkspaceAllowsIndependentTabsAndUsesServerRevision(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	first, created, _, err := manager.Update(runtime, "one.md", 100, []byte("tab A"))
 	if err != nil || !created || first.Revision != 1 {
 		t.Fatalf("first update = %#v created=%v err=%v", first, created, err)
@@ -52,12 +44,8 @@ func TestLocalPreviewWorkspaceAllowsIndependentTabsAndUsesServerRevision(t *test
 }
 
 func TestLocalPreviewWorkspaceSkipsIdenticalContentUpdates(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	first, created, applied, err := manager.Update(runtime, "one.md", 1, []byte("same"))
 	if err != nil || !created || !applied || first.Revision != 1 {
 		t.Fatalf("first update = %#v created=%v applied=%v err=%v", first, created, applied, err)
@@ -76,12 +64,8 @@ func TestLocalPreviewWorkspaceSkipsIdenticalContentUpdates(t *testing.T) {
 }
 
 func TestLocalPreviewWorkspaceReusesWorkspaceWhenArticleChanges(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	first, _, _, err := manager.Update(runtime, "one.md", 1, []byte("first"))
 	if err != nil {
 		t.Fatal(err)
@@ -98,14 +82,10 @@ func TestLocalPreviewWorkspaceReusesWorkspaceWhenArticleChanges(t *testing.T) {
 }
 
 func TestLocalPreviewIdleRuntimeDetachesIdleWorkspace(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return base }
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
 	workspace, _, _, err := manager.Update(runtime, "one.md", 1, []byte("draft"))
 	if err != nil {
 		t.Fatal(err)
@@ -125,12 +105,8 @@ func TestLocalPreviewIdleRuntimeDetachesIdleWorkspace(t *testing.T) {
 }
 
 func TestLocalPreviewWorkspaceCleanupGateBlocksIngressAndUpdates(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	if _, _, _, err := manager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)
 	}
@@ -169,12 +145,8 @@ func TestLocalPreviewWorkspaceCleanupGateBlocksIngressAndUpdates(t *testing.T) {
 }
 
 func TestLocalPreviewCleanupRejectsRequestsThatArriveDuringCleanup(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	if _, _, _, err := manager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)
 	}
@@ -231,14 +203,10 @@ func TestLocalPreviewCleanupRejectsRequestsThatArriveDuringCleanup(t *testing.T)
 }
 
 func TestLocalPreviewNavigationReadGateBlocksIdleCleanup(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return base }
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
 	if _, _, _, err := manager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)
 	}
@@ -283,10 +251,7 @@ func TestLocalPreviewNavigationReadGateBlocksIdleCleanup(t *testing.T) {
 }
 
 func TestLocalPreviewWorkspaceTracksPreviewActivity(t *testing.T) {
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	manager := newLocalPreviewWorkspaceFixture(t).Manager
 	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return base }
 	manager.Touch("tech")
@@ -302,12 +267,8 @@ func TestLocalPreviewWorkspaceTracksPreviewActivity(t *testing.T) {
 }
 
 func TestLocalPreviewWorkspaceRunsBeforeWriteHook(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	manager, runtime := fixture.Manager, fixture.Runtime
 	hookCalled := false
 	workspace, _, _, err := manager.UpdateWithBeforeWrite(runtime, "one.md", 1, []byte("updated"), func() error {
 		hookCalled = true
@@ -320,12 +281,8 @@ func TestLocalPreviewWorkspaceRunsBeforeWriteHook(t *testing.T) {
 }
 
 func TestLocalPreviewWorkspaceSyncsContentResource(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	repo, runtime, manager := fixture.Repo, fixture.Runtime, fixture.Manager
 	workspace, _, _, err := manager.Update(runtime, "one.md", 1, []byte("draft"))
 	if err != nil {
 		t.Fatal(err)
@@ -355,12 +312,8 @@ func TestLocalPreviewWorkspaceSyncsContentResource(t *testing.T) {
 }
 
 func TestLocalPreviewWorkspaceRebuildRequiredResetConvergesProduction(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content"}
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	repo, runtime, manager := fixture.Repo, fixture.Runtime, fixture.Manager
 	workspace, _, _, err := manager.Update(runtime, "one.md", 1, []byte("unsaved draft"))
 	if err != nil {
 		t.Fatal(err)
@@ -418,18 +371,15 @@ func TestLocalPreviewWorkspaceRebuildRequiredResetConvergesProduction(t *testing
 }
 
 func TestLocalPreviewWorkspaceIgnoresStaticResourceSync(t *testing.T) {
-	repo := makeLocalPreviewWorkspaceRepo(t)
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	repo, manager, runtime := fixture.Repo, fixture.Manager, fixture.Runtime
 	if err := os.MkdirAll(filepath.Join(repo, "static"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "static", "logo.png"), []byte("logo"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	runtime := config.SiteRuntime{ID: "tech", RepoPath: repo, ContentDir: "content", StaticDir: "static"}
-	manager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime.StaticDir = "static"
 	if _, _, _, err := manager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)
 	}
@@ -470,19 +420,4 @@ func assertWorkspaceFileContent(t *testing.T, path, want string) {
 	if string(got) != want {
 		t.Fatalf("%s = %q, want %q", path, got, want)
 	}
-}
-
-func makeLocalPreviewWorkspaceRepo(t *testing.T) string {
-	t.Helper()
-	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, "content"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "content", "one.md"), []byte("original"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "content", "two.md"), []byte("two original"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	return repo
 }

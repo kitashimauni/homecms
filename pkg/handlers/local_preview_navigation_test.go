@@ -28,17 +28,11 @@ func (m *fakeLocalPreviewNavigationWorkspaceManager) AcquireNavigation(string) (
 }
 
 func TestNavigateLocalPreviewUsesShadowContentAndPreservesProductionContent(t *testing.T) {
-	site, runtime := localPreviewNavigationTestSite(t)
-	configureLocalPreviewNavigationTestSite(t, site)
+	site, runtime, workspaceManager := newLocalPreviewNavigationFixture(t)
 	productionArticle := filepath.Join(runtime.RepoPath, runtime.ContentDir, "one.md")
 	if err := os.WriteFile(productionArticle, []byte("original"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	workspaceManager, err := services.NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = workspaceManager.Shutdown() })
 	workspace, _, _, err := workspaceManager.Update(runtime, "one.md", 7, []byte("draft"))
 	if err != nil {
 		t.Fatal(err)
@@ -77,13 +71,7 @@ func TestNavigateLocalPreviewUsesShadowContentAndPreservesProductionContent(t *t
 }
 
 func TestNavigateLocalPreviewAcceptsAnyTabAndArticle(t *testing.T) {
-	site, runtime := localPreviewNavigationTestSite(t)
-	configureLocalPreviewNavigationTestSite(t, site)
-	workspaceManager, err := services.NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = workspaceManager.Shutdown() })
+	site, runtime, workspaceManager := newLocalPreviewNavigationFixture(t)
 	if _, _, _, err := workspaceManager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)
 	}
@@ -168,13 +156,7 @@ func TestNavigateLocalPreviewReturnsErrorWhenResolverFails(t *testing.T) {
 }
 
 func TestNavigateLocalPreviewHoldsReadGateDuringURLResolution(t *testing.T) {
-	site, runtime := localPreviewNavigationTestSite(t)
-	configureLocalPreviewNavigationTestSite(t, site)
-	manager, err := services.NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = manager.Shutdown() })
+	site, runtime, manager := newLocalPreviewNavigationFixture(t)
 	if _, _, _, err := manager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)
 	}
@@ -277,4 +259,16 @@ func configureLocalPreviewNavigationTestSite(t *testing.T, site config.SiteConfi
 		config.Sites = previousSites
 		config.DefaultSiteID = previousDefaultSiteID
 	})
+}
+
+func newLocalPreviewNavigationFixture(t *testing.T) (config.SiteConfig, config.SiteRuntime, *services.LocalPreviewWorkspaceManager) {
+	t.Helper()
+	site, runtime := localPreviewNavigationTestSite(t)
+	configureLocalPreviewNavigationTestSite(t, site)
+	manager, err := services.NewLocalPreviewWorkspaceManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalPreviewWorkspaceManager() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Shutdown() })
+	return site, runtime, manager
 }

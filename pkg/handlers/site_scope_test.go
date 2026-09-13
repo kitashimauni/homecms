@@ -42,14 +42,27 @@ func restoreSiteScopeConfig(t *testing.T) {
 	})
 }
 
+// configureSiteScope installs the legacy registry only for handler contract
+// tests that exercise query-based site selection. Production code should keep
+// using an explicit SiteRuntime; this helper makes the remaining global
+// boundary visible and restores it through restoreSiteScopeConfig.
+func configureSiteScope(t *testing.T, sites []config.SiteConfig) {
+	t.Helper()
+	if len(sites) == 0 {
+		t.Fatal("configureSiteScope requires at least one site")
+	}
+	config.DefaultSiteID = sites[0].ID
+	config.Sites = append([]config.SiteConfig(nil), sites...)
+	config.ApplySiteRuntime(sites[0])
+}
+
 func TestRequestedRuntimeResolvesSelectedSiteWithoutMutatingGlobals(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreSiteScopeConfig(t)
 
 	defaultRepo := t.TempDir()
 	selectedRepo := t.TempDir()
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{
+	configureSiteScope(t, []config.SiteConfig{
 		{
 			ID:             "default",
 			Name:           "Default",
@@ -76,8 +89,7 @@ func TestRequestedRuntimeResolvesSelectedSiteWithoutMutatingGlobals(t *testing.T
 			HugoServerBind: "127.0.0.1",
 			SnippetPaths:   []string{filepath.Join(selectedRepo, ".vscode", "md.code-snippets")},
 		},
-	}
-	config.ApplySiteRuntime(config.Sites[0])
+	})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -122,8 +134,7 @@ func TestGetSnippetsUsesSelectedSitePaths(t *testing.T) {
   }
 }`)
 
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{
+	configureSiteScope(t, []config.SiteConfig{
 		{
 			ID:             "default",
 			RepoPath:       defaultRepo,
@@ -148,8 +159,7 @@ func TestGetSnippetsUsesSelectedSitePaths(t *testing.T) {
 			HugoServerBind: "127.0.0.1",
 			SnippetPaths:   []string{filepath.Join(selectedRepo, ".vscode", "md.code-snippets")},
 		},
-	}
-	config.ApplySiteRuntime(config.Sites[0])
+	})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -189,8 +199,7 @@ content:
 preview:
   url_field: permalink
 `)
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{{
+	configureSiteScope(t, []config.SiteConfig{{
 		ID:             "default",
 		RepoPath:       repoPath,
 		Generator:      "hugo",
@@ -200,8 +209,7 @@ preview:
 		PreviewURL:     "/",
 		HugoServerPort: "1314",
 		HugoServerBind: "127.0.0.1",
-	}}
-	config.ApplySiteRuntime(config.Sites[0])
+	}})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -242,8 +250,7 @@ content:
         - { name: slug, widget: string }
         - { name: title, widget: string }
 `)
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{{
+	configureSiteScope(t, []config.SiteConfig{{
 		ID:             "default",
 		RepoPath:       repoPath,
 		Generator:      "hugo",
@@ -253,8 +260,7 @@ content:
 		PreviewURL:     "/",
 		HugoServerPort: "1314",
 		HugoServerBind: "127.0.0.1",
-	}}
-	config.ApplySiteRuntime(config.Sites[0])
+	}})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -287,8 +293,7 @@ title: Selected Post
 selected body
 `)
 
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{
+	configureSiteScope(t, []config.SiteConfig{
 		{
 			ID:             "default",
 			RepoPath:       defaultRepo,
@@ -311,8 +316,7 @@ selected body
 			HugoServerPort: "1315",
 			HugoServerBind: "127.0.0.1",
 		},
-	}
-	config.ApplySiteRuntime(config.Sites[0])
+	})
 
 	listW := httptest.NewRecorder()
 	listC, _ := gin.CreateTestContext(listW)
@@ -384,8 +388,7 @@ content:
         - { name: body, widget: markdown }
 `)
 
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{
+	configureSiteScope(t, []config.SiteConfig{
 		{
 			ID:             "default",
 			RepoPath:       defaultRepo,
@@ -408,8 +411,7 @@ content:
 			HugoServerPort: "1315",
 			HugoServerBind: "127.0.0.1",
 		},
-	}
-	config.ApplySiteRuntime(config.Sites[0])
+	})
 
 	body := []byte(`{"collection":"docs","fields":{"slug":"launch","title":"Launch Notes","body":"Ready."}}`)
 	w := httptest.NewRecorder()
@@ -459,8 +461,7 @@ content:
         - { name: title, widget: string }
 `)
 
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{
+	configureSiteScope(t, []config.SiteConfig{
 		{
 			ID:             "default",
 			RepoPath:       defaultRepo,
@@ -483,8 +484,7 @@ content:
 			HugoServerPort: "1315",
 			HugoServerBind: "127.0.0.1",
 		},
-	}
-	config.ApplySiteRuntime(config.Sites[0])
+	})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -534,9 +534,7 @@ func TestSelectedSiteHandlersRejectUnknownSite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	restoreSiteScopeConfig(t)
 
-	config.DefaultSiteID = "default"
-	config.Sites = []config.SiteConfig{{ID: "default", RepoPath: t.TempDir(), ContentDir: "content", StaticDir: "static", PublicDir: "public"}}
-	config.ApplySiteRuntime(config.Sites[0])
+	configureSiteScope(t, []config.SiteConfig{{ID: "default", RepoPath: t.TempDir(), ContentDir: "content", StaticDir: "static", PublicDir: "public"}})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
