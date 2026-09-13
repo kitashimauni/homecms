@@ -139,21 +139,9 @@ func TestPersistentSupervisorRetriesStoppingRuntimeAfterFailedStop(t *testing.T)
 func TestScheduledRefreshKeepsActiveWorkspaceAttached(t *testing.T) {
 	manager, site := newTestLocalPreviewManager(t)
 	defer shutdownTestLocalPreviewManager(t, manager)
-	workspaceManager, err := NewLocalPreviewWorkspaceManager(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = workspaceManager.Shutdown() })
-
-	repo := t.TempDir()
-	contentDir := filepath.Join(repo, "content")
-	if err := os.MkdirAll(contentDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(contentDir, "one.md"), []byte("production"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	site.RepoPath = repo
+	fixture := newLocalPreviewWorkspaceFixture(t)
+	workspaceManager := fixture.Manager
+	site.RepoPath = fixture.Repo
 	runtime := config.NewSiteRuntime(site)
 	if _, _, _, err := workspaceManager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)
@@ -186,9 +174,7 @@ func TestStopIdleSkipsAlwaysOnSites(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(site.RepoPath, site.ContentDir), 0755); err != nil {
 		t.Fatal(err)
 	}
-	previousSites := config.Sites
-	config.Sites = []config.SiteConfig{site}
-	t.Cleanup(func() { config.Sites = previousSites })
+	installLocalPreviewSiteRegistry(t, site)
 	runtime := config.NewSiteRuntime(site)
 	if _, _, _, err := workspaceManager.Update(runtime, "one.md", 1, []byte("draft")); err != nil {
 		t.Fatal(err)

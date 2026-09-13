@@ -11,6 +11,7 @@ HomeCMSの利用方法、仕様、設計、および監査結果を目的別に�
 - [`.homecms.yml` 移行ガイド](guides/migrating-to-homecms.md) - legacy `static/admin/config.yml` からの移行
 - [リリース前チェックリスト](guides/release-checklist.md) - リリース候補PRで確認する項目
 - [Smoke Test Checklist](guides/smoke-tests.md) - 変更後の最低限確認項目
+- [テスト構成ガイド](guides/testing.md) - unit、handler contract、Local Preview lifecycle、外部 smoke の責務分担
 
 ## リファレンス
 
