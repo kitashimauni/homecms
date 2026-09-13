@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -305,17 +306,26 @@ func loadSiteRegistry() error {
 	}
 
 	var registry SiteRegistryConfig
-	if err := yaml.Unmarshal(content, &registry); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(string(content)))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&registry); err != nil {
 		return fmt.Errorf("parse site registry config %q: %w", SitesConfigPath, err)
 	}
 
 	normalized := make([]SiteConfig, 0, len(registry.Sites))
-	for _, site := range registry.Sites {
+	seenSiteIDs := make(map[string]int, len(registry.Sites))
+	for index, site := range registry.Sites {
+		if err := validateSiteRegistryEntry(site, index); err != nil {
+			return fmt.Errorf("site registry config %q: %w", SitesConfigPath, err)
+		}
 		site = normalizeSiteConfig(site)
 		if site.ID == "" {
-			slog.Warn("Skipping site registry entry without id")
-			continue
+			return fmt.Errorf("site registry config %q: sites[%d].id is required", SitesConfigPath, index)
 		}
+		if previousIndex, exists := seenSiteIDs[site.ID]; exists {
+			return fmt.Errorf("site registry config %q: duplicate site id %q at sites[%d] and sites[%d]", SitesConfigPath, site.ID, previousIndex, index)
+		}
+		seenSiteIDs[site.ID] = index
 		if err := validateSitePreviewConfig(site); err != nil {
 			return fmt.Errorf("site %q: %w", site.ID, err)
 		}
@@ -334,6 +344,65 @@ func loadSiteRegistry() error {
 		return fmt.Errorf("default site %q is not defined in site registry %q", DefaultSiteID, SitesConfigPath)
 	}
 	applyDefaultSite(defaultSite)
+	return nil
+}
+
+func validateSiteRegistryEntry(site SiteConfig, index int) error {
+	path := fmt.Sprintf("sites[%d]", index)
+	if strings.TrimSpace(site.ID) == "" {
+		return fmt.Errorf("%s.id is required", path)
+	}
+	if strings.TrimSpace(site.RepoPath) == "" {
+		return fmt.Errorf("%s.repo_path is required for site %q", path, strings.TrimSpace(site.ID))
+	}
+
+	switch generator := strings.ToLower(strings.TrimSpace(site.Generator)); generator {
+	case "", "hugo", "eleventy", "11ty":
+	default:
+		return fmt.Errorf("%s.generator has unsupported value %q for site %q", path, site.Generator, strings.TrimSpace(site.ID))
+	}
+	switch runtime := strings.ToLower(strings.TrimSpace(site.Runtime)); runtime {
+	case "", "direct", "mise":
+	default:
+		return fmt.Errorf("%s.runtime has unsupported value %q for site %q", path, site.Runtime, strings.TrimSpace(site.ID))
+	}
+
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "content_dir", value: site.ContentDir},
+		{name: "static_dir", value: site.StaticDir},
+		{name: "public_dir", value: site.PublicDir},
+		{name: "article_media_dir", value: site.ArticleMediaDir},
+		{name: "static_media_dir", value: site.StaticMediaDir},
+	} {
+		if err := validateRegistryRelativeDir(path+"."+field.name, field.value); err != nil {
+			return err
+		}
+	}
+	if port := strings.TrimSpace(site.HugoServerPort); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return fmt.Errorf("%s.hugo_server_port has invalid value %q; expected 1-65535", path, site.HugoServerPort)
+		}
+	}
+	return nil
+}
+
+func validateRegistryRelativeDir(field, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	isWindowsAbsolute := len(value) >= 3 && ((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':' && (value[2] == '/' || value[2] == '\\')
+	if strings.ContainsRune(value, '\x00') || filepath.IsAbs(value) || isWindowsAbsolute || strings.HasPrefix(value, "/") || strings.HasPrefix(value, `\`) {
+		return fmt.Errorf("%s must be a repository-relative path, got %q", field, value)
+	}
+	cleaned := pathpkg.Clean(strings.ReplaceAll(value, `\`, "/"))
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fmt.Errorf("%s must stay within the repository, got %q", field, value)
+	}
 	return nil
 }
 

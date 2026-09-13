@@ -16,29 +16,47 @@ import (
 )
 
 var (
-	articleCaches = map[string][]models.Article{}
-	cacheMutex    sync.Mutex
+	articleCaches            = map[string][]models.Article{}
+	cacheMutex               sync.RWMutex
+	cacheLocksMu             sync.Mutex
+	cacheLocks               = map[string]*sync.Mutex{}
+	rebuildArticlesCacheFunc = rebuildArticlesCache
 )
 
 func GetArticlesCacheForRuntime(runtime config.SiteRuntime) ([]models.Article, error) {
 	start := time.Now()
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
 	cacheKey := articleCacheKeyForRuntime(runtime)
+	cacheLock := articleCacheLockForKey(cacheKey)
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+
+	cacheMutex.RLock()
 	if articleCache, ok := articleCaches[cacheKey]; ok {
-		return articleCache, nil
+		cached := cloneArticles(articleCache)
+		cacheMutex.RUnlock()
+		return cached, nil
+	}
+	cacheMutex.RUnlock()
+
+	articles, err := rebuildArticlesCacheFunc(runtime)
+	if err != nil {
+		return nil, err
 	}
 
-	defer func() {
-		slog.Info("Cache rebuild completed", "site_cache_key", cacheKey, "duration", time.Since(start), "count", len(articleCaches[cacheKey]))
-	}()
+	cacheMutex.Lock()
+	articleCaches[cacheKey] = articles
+	cacheMutex.Unlock()
 
+	slog.Info("Cache rebuild completed", "site_cache_key", cacheKey, "duration", time.Since(start), "count", len(articles))
+	return cloneArticles(articles), nil
+}
+
+func rebuildArticlesCache(runtime config.SiteRuntime) ([]models.Article, error) {
 	contentDir := filepath.Join(runtime.RepoPath, runtime.ContentDir)
 	dirtyFiles, _ := getGitDirtyFiles(runtime)
 
 	var paths []string
-	err := filepath.WalkDir(contentDir, func(path string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(contentDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -46,15 +64,13 @@ func GetArticlesCacheForRuntime(runtime config.SiteRuntime) ([]models.Article, e
 			paths = append(paths, path)
 		}
 		return nil
-	})
-
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
 
 	articles := make([]models.Article, len(paths))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, config.CacheConcurrency) // Limit concurrency
+	sem := make(chan struct{}, config.CacheConcurrency)
 
 	for i, path := range paths {
 		wg.Add(1)
@@ -70,9 +86,8 @@ func GetArticlesCacheForRuntime(runtime config.SiteRuntime) ([]models.Article, e
 			repoRelPath = filepath.ToSlash(repoRelPath)
 			isDirty := dirtyFiles[repoRelPath]
 
-			// Read file to get title (Limit for performance)
 			content, err := readHead(path, config.FileReadHeadLimit)
-			title := relPath // Default to path
+			title := relPath
 			if err == nil {
 				fm, _, _, err := ParseFrontMatter(content)
 				if err == nil {
@@ -91,8 +106,6 @@ func GetArticlesCacheForRuntime(runtime config.SiteRuntime) ([]models.Article, e
 	}
 
 	wg.Wait()
-
-	articleCaches[cacheKey] = articles
 	return articles, nil
 }
 
@@ -159,6 +172,10 @@ func getGitDirtyFiles(runtime config.SiteRuntime) (map[string]bool, error) {
 }
 
 func InvalidateCacheForRuntime(runtime config.SiteRuntime) {
+	cacheLock := articleCacheLockForKey(articleCacheKeyForRuntime(runtime))
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+
 	cacheMutex.Lock()
 	defer cacheMutex.Unlock()
 	delete(articleCaches, articleCacheKeyForRuntime(runtime))
@@ -170,11 +187,14 @@ func UpdateCacheForRuntime(runtime config.SiteRuntime, relPath string) {
 		slog.Debug("Cache update single", "path", relPath, "duration", time.Since(start))
 	}()
 
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
 	cacheKey := articleCacheKeyForRuntime(runtime)
-	articleCache, cacheLoaded := articleCaches[cacheKey]
+	cacheLock := articleCacheLockForKey(cacheKey)
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+
+	cacheMutex.RLock()
+	_, cacheLoaded := articleCaches[cacheKey]
+	cacheMutex.RUnlock()
 	if !cacheLoaded {
 		return // Next Get will rebuild
 	}
@@ -184,13 +204,18 @@ func UpdateCacheForRuntime(runtime config.SiteRuntime, relPath string) {
 	// Check if file exists
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		// Remove from cache
-		for i, art := range articleCache {
-			if art.Path == relPath {
-				articleCache = append(articleCache[:i], articleCache[i+1:]...)
-				articleCaches[cacheKey] = articleCache
-				break
+		cacheMutex.Lock()
+		articleCache, cacheLoaded := articleCaches[cacheKey]
+		if cacheLoaded {
+			for i, art := range articleCache {
+				if art.Path == relPath {
+					articleCache = append(articleCache[:i], articleCache[i+1:]...)
+					articleCaches[cacheKey] = articleCache
+					break
+				}
 			}
 		}
+		cacheMutex.Unlock()
 		return
 	}
 
@@ -216,6 +241,13 @@ func UpdateCacheForRuntime(runtime config.SiteRuntime, relPath string) {
 		IsDirty: isDirty,
 	}
 
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+	articleCache, cacheLoaded := articleCaches[cacheKey]
+	if !cacheLoaded {
+		return
+	}
+	articleCache = cloneArticles(articleCache)
 	found := false
 	for i, art := range articleCache {
 		if art.Path == relPath {
@@ -228,6 +260,21 @@ func UpdateCacheForRuntime(runtime config.SiteRuntime, relPath string) {
 		articleCache = append(articleCache, newArt)
 	}
 	articleCaches[cacheKey] = articleCache
+}
+
+func articleCacheLockForKey(cacheKey string) *sync.Mutex {
+	cacheLocksMu.Lock()
+	defer cacheLocksMu.Unlock()
+	if lock, ok := cacheLocks[cacheKey]; ok {
+		return lock
+	}
+	lock := &sync.Mutex{}
+	cacheLocks[cacheKey] = lock
+	return lock
+}
+
+func cloneArticles(articles []models.Article) []models.Article {
+	return append([]models.Article(nil), articles...)
 }
 
 func articleCacheKeyForRuntime(runtime config.SiteRuntime) string {

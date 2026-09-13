@@ -235,7 +235,7 @@ func CommitAndPushDraftPreview(ctx context.Context, runtime config.SiteRuntime, 
 // of the UI's stale marker and prevents a client from creating a PR after
 // editing content that has not been deployed.
 func draftPreviewMatchesWorkingTree(ctx context.Context, runtime config.SiteRuntime, state DraftPreviewState) (bool, error) {
-	unlock := LockRepositoryOperation()
+	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 	return draftPreviewMatchesWorkingTreeLocked(ctx, runtime, state)
 }
@@ -307,7 +307,7 @@ func commitAndPushDraftPreview(ctx context.Context, runtime config.SiteRuntime, 
 		return "", "", err
 	}
 
-	unlock := LockRepositoryOperation()
+	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 
 	index, err := os.CreateTemp("", "homecms-draft-index-*")
@@ -560,7 +560,7 @@ func publishDraftPreview(ctx context.Context, runtime config.SiteRuntime, token,
 		return "", ErrDraftPreviewNotReady
 	}
 
-	unlocksRepository := LockRepositoryOperation()
+	unlocksRepository := LockRepositoryOperation(runtime)
 	matches, matchErr := draftPreviewMatchesWorkingTreeLocked(ctx, runtime, state)
 	unlocksRepository()
 	if matchErr != nil {
@@ -639,7 +639,7 @@ func cleanupDraftPreview(ctx context.Context, runtime config.SiteRuntime, token,
 		return err
 	}
 
-	unlock := LockRepositoryOperation()
+	unlock := LockRepositoryOperation(runtime)
 	deleteLog, deleteBranchErr := push(runtime.RepoPath, token, "push", runtime.GitRemote, ":refs/heads/"+state.Branch)
 	unlock()
 	if deleteBranchErr != nil {
@@ -651,7 +651,7 @@ func cleanupDraftPreview(ctx context.Context, runtime config.SiteRuntime, token,
 		}
 	}
 
-	unlock = LockRepositoryOperation()
+	unlock = LockRepositoryOperation(runtime)
 	_, localDeleteErr := runGitCommand(ctx, runtime.RepoPath, nil, "update-ref", "-d", "refs/heads/"+state.Branch, state.CommitSHA)
 	unlock()
 	if localDeleteErr != nil {

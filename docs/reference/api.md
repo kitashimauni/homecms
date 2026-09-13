@@ -611,26 +611,30 @@ CMS設定を取得します。サイトリポジトリ直下の `.homecms.yml` �
     "status": "ok",
     "timestamp": "2026-01-10T12:00:00Z",
     "uptime": "1h30m45s",
-    "checks": {
-        "content_dir": {
-            "healthy": true
-        },
-        "git_repo": {
-            "healthy": true
+    "sites": {
+        "tech": {
+            "healthy": true,
+            "checks": {
+                "content_dir": {"healthy": true},
+                "git_repo": {"healthy": true}
+            }
         }
-    },
-    "system": {
-        "goroutines": 15,
-        "memory_alloc": 12
     }
 }
 ```
+
+single-site構成では互換性のため、同じsiteの`checks`もレスポンス直下に含まれます。`sites`には全siteのrepository/content依存関係が含まれ、いずれかがunhealthyならHTTP 503になります。Local Live Previewの停止・再試行状態はoptional dependencyのため、readiness判定には含めません。
 
 **レスポンス (異常時)**: HTTP 503
 ```json
 {
     "status": "degraded",
-    "checks": {"content_dir": {"healthy": false}}
+    "sites": {
+        "daily": {
+            "healthy": false,
+            "checks": {"content_dir": {"healthy": false}, "git_repo": {"healthy": true}}
+        }
+    }
 }
 ```
 
