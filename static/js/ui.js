@@ -954,8 +954,12 @@ function renderMediaGrid(container, files, mode, currentPath, onSelect) {
             const file = e.target.files[0];
             showToast("Uploading...", "info");
             try {
-                await API.uploadMedia(file, mode, currentPath);
-                showToast("Uploaded!", "success");
+                const result = await API.uploadMedia(file, mode, currentPath);
+                if (result?.local_preview_sync === false) {
+                    showToast("Uploaded, but Local Live Preview sync failed", "warning");
+                } else {
+                    showToast("Uploaded!", "success");
+                }
                 loadAndRenderMedia(container, mode, currentPath, onSelect);
             } catch (err) {
                 showToast("Upload failed: " + err.message, "error");
@@ -1028,8 +1032,12 @@ function renderMediaGrid(container, files, mode, currentPath, onSelect) {
             e.stopPropagation();
             if (!confirm(`Delete ${f.name}?`)) return;
             try {
-                await API.deleteMedia(f.repo_path);
-                showToast("Deleted", "success");
+                const result = await API.deleteMedia(f.repo_path);
+                if (result?.local_preview_sync === false) {
+                    showToast("Deleted, but Local Live Preview sync failed", "warning");
+                } else {
+                    showToast("Deleted", "success");
+                }
                 loadAndRenderMedia(container, mode, currentPath, onSelect);
             } catch (err) {
                 showToast("Delete failed", "error");

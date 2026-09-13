@@ -244,10 +244,12 @@ CSRFトークンを取得します。
 **レスポンス**:
 ```json
 {
-    "status": "ok",
-    "log": "Deleted"
+    "status": "deleted",
+    "local_preview_sync": true
 }
 ```
+
+記事削除はproductionの削除結果を正とし、Local Live Previewの事前metadata invalidationはstale URL防止のために試行します。Previewが停止中またはmetadata invalidation・shadow同期に失敗した場合も記事削除自体は成功し、`local_preview_sync`が`false`になります。`false`の場合はserver logとPreviewの再起動・再同期を確認してください。
 
 ### POST /admin/api/diff
 
@@ -322,6 +324,7 @@ CSRFトークンを取得します。
   "status": "ready",
   "process_state": "ready",
   "workspace_active": false,
+  "workspace_rebuild_required": false,
   "always_on": true,
   "supervisor_state": "running",
   "next_refresh_at": "2026-09-13T04:00:00+09:00",
@@ -330,6 +333,8 @@ CSRFトークンを取得します。
 ```
 
 `supervisor_state`は`starting`、`running`、`retrying`、`stopped`、`disabled`のいずれかです。scheduled refreshはworkspaceをdetach/deleteせず、generator processだけをgraceful restartします。
+
+Preview同期に失敗してworkspaceの再構築が必要な場合は`workspace_rebuild_required: true`になります。次回のPreviewアクセスまたは常駐supervisorの復旧で、generatorとshadow workspaceをproduction treeから再生成し、成功時にこの状態を解除します。
 
 ### POST /admin/api/preview/markdown
 
@@ -478,9 +483,12 @@ readyになったdraft branchからproduction branchへのPull Requestを作成�
     "path": "/images/image_1704844800.jpg",
     "size": 102400,
     "url": "/admin/api/media/raw?path=static/images/image_1704844800.jpg",
-    "repo_path": "static/images/image_1704844800.jpg"
+    "repo_path": "static/images/image_1704844800.jpg",
+    "local_preview_sync": true
 }
 ```
+
+`local_preview_sync`はproductionへの保存後に行うLocal Live Previewのshadow同期・metadata invalidationの結果です。Preview側の障害だけでアップロードをHTTP 500にはせず、同期に失敗した場合は`false`を返します。
 
 **エラーレスポンス**:
 ```json
@@ -508,9 +516,12 @@ readyになったdraft branchからproduction branchへのPull Requestを作成�
 **レスポンス**:
 ```json
 {
-    "status": "deleted"
+    "status": "deleted",
+    "local_preview_sync": true
 }
 ```
+
+削除もproductionの結果を正とします。Preview同期が失敗した場合は削除を再試行せず、`local_preview_sync: false`を診断情報として扱います。
 
 ### GET /admin/api/media/raw
 

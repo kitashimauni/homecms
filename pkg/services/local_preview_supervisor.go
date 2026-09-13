@@ -318,6 +318,10 @@ func (m *LocalPreviewManager) persistentRuntime(site config.SiteConfig, workspac
 }
 
 func (m *LocalPreviewManager) ensurePersistentPreview(ctx context.Context, site config.SiteConfig, workspaceManager *LocalPreviewWorkspaceManager) error {
+	runtime := config.NewSiteRuntime(site)
+	if err := m.recoverRequiredWorkspace(ctx, runtime, workspaceManager); err != nil {
+		return err
+	}
 	runtime, lease, err := m.persistentRuntime(site, workspaceManager)
 	if err != nil {
 		return err
@@ -330,6 +334,17 @@ func (m *LocalPreviewManager) ensurePersistentPreview(ctx context.Context, site 
 }
 
 func (m *LocalPreviewManager) restartPersistentPreview(ctx context.Context, site config.SiteConfig, workspaceManager *LocalPreviewWorkspaceManager) error {
+	runtime := config.NewSiteRuntime(site)
+	if workspaceManager != nil && workspaceManager.RebuildRequired(site.ID) {
+		if err := m.recoverRequiredWorkspace(ctx, runtime, workspaceManager); err != nil {
+			return err
+		}
+		m.setManualStop(runtime.ID, false)
+		if _, err := m.ensureReadyRuntimeContext(ctx, runtime); err != nil {
+			return fmt.Errorf("restart local preview process for rebuilt site %q: %w", runtime.ID, err)
+		}
+		return nil
+	}
 	runtime, lease, err := m.persistentRuntime(site, workspaceManager)
 	if err != nil {
 		return err

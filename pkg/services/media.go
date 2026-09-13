@@ -18,11 +18,12 @@ import (
 )
 
 type MediaFile struct {
-	Name     string `json:"name"`
-	Path     string `json:"path"` // Relative path for usage in markdown
-	Size     int64  `json:"size"`
-	URL      string `json:"url"` // URL for preview
-	RepoPath string `json:"repo_path"`
+	Name             string `json:"name"`
+	Path             string `json:"path"` // Relative path for usage in markdown
+	Size             int64  `json:"size"`
+	URL              string `json:"url"` // URL for preview
+	RepoPath         string `json:"repo_path"`
+	LocalPreviewSync *bool  `json:"local_preview_sync,omitempty"`
 }
 
 var ErrInvalidMedia = errors.New("invalid media")

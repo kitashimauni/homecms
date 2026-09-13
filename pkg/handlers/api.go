@@ -425,10 +425,12 @@ func DeleteArticle(c *gin.Context) {
 
 	// Invalidate Eleventy metadata before deleting the shadow article. This
 	// makes URL resolution return a rebuilding state while the old file is
-	// being removed, instead of briefly serving its stale URL.
-	if err := services.DefaultLocalPreviewManager().InvalidateArticleURL(runtime, filepath.ToSlash(req.Path)); err != nil {
-		ErrorInternal(c, "Delete failed: "+err.Error())
-		return
+	// being removed, instead of briefly serving its stale URL. Preview is an
+	// auxiliary consumer, so a failed barrier is logged and the production
+	// deletion continues; the post-delete sync below is the final convergence
+	// point.
+	if err := invalidateLocalPreviewArticleURL(runtime, filepath.ToSlash(req.Path)); err != nil {
+		slog.Warn("Failed to prepare Local Live Preview metadata before article deletion", "site", runtime.ID, "path", req.Path, "error", err)
 	}
 
 	if err := services.DeleteFileForRuntime(runtime, req.Path); err != nil {
@@ -441,8 +443,11 @@ func DeleteArticle(c *gin.Context) {
 	services.UpdateCacheForRuntime(runtime, req.Path)
 	// Keep an active site-scoped Local Live Preview workspace in sync without
 	// releasing the generator runtime for the next article.
-	syncLocalPreviewContentResource(runtime, filepath.ToSlash(filepath.Join(runtime.ContentDir, req.Path)), true, false)
-	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+	localPreviewSync := true
+	if err := syncLocalPreviewContentResourceForMutation(runtime, filepath.ToSlash(filepath.Join(runtime.ContentDir, req.Path)), true, true); err != nil {
+		localPreviewSync = false
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "local_preview_sync": localPreviewSync})
 }
 
 func respondArticleRevisionConflict(c *gin.Context, path, currentRevision string) {
