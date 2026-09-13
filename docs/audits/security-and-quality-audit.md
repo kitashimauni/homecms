@@ -31,9 +31,9 @@ HomeCMSの認証、記事編集、メディア管理、Git連携、Local Live Pr
 
 ### 品質・運用
 
-- Frontend testはUI state、Local Preview、editor state/workflow、site-scoped APIに分割し、fake browser/storage harnessを共有する。generator-neutralな重複ケースを増やさず、Hugo/Eleventy固有のfixture・integration testは維持する（Issue #78）。
+- Frontend testはUI state、Local Preview、editor state/workflow、site-scoped APIに分割し、fake browser/storage harnessを共有する。generator-neutralな重複ケースを増やさず、Hugo/Eleventy固有のfixture・integration testは維持する（Issue #78のfrontend側を先行対応）。Go Local Preview fixtureの共通化とprocess-wide global config mutation削減は継続課題とする。
 - CIは通常の`go test`、`go vet`、build、JavaScript testに加えて、Linux上の独立した`go test -race ./...` jobを実行する（Issue #87）。
-- Dockerはloopback公開、非root runtime、`HOMECMS_REPOS`明示allowlist、secret-freeな`tool-bootstrap`を維持する（Issue #79/#80）。
+- Dockerはloopback公開、非root runtime、`HOMECMS_REPOS`明示allowlist、secret-freeな`tool-bootstrap`を維持する。
 
 ### 残余リスクと今後の作業
 

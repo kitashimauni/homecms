@@ -196,11 +196,12 @@ func localPreviewProcessDescription(cmd *exec.Cmd, tree *localPreviewProcessTree
 // The x/sys/windows package does not expose this small accounting structure.
 // Its layout is fixed by the Windows API and is valid on 32- and 64-bit builds.
 type windowsJobBasicAccountingInformation struct {
-	TotalUserTime            int64
-	TotalKernelTime          int64
-	ThisPeriodTotalUserTime  int64
-	TotalPageFaultCount      uint32
-	TotalProcesses           uint32
-	ActiveProcesses          uint32
-	TotalTerminatedProcesses uint32
+	TotalUserTime             int64
+	TotalKernelTime           int64
+	ThisPeriodTotalUserTime   int64
+	ThisPeriodTotalKernelTime int64
+	TotalPageFaultCount       uint32
+	TotalProcesses            uint32
+	ActiveProcesses           uint32
+	TotalTerminatedProcesses  uint32
 }
