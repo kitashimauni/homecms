@@ -211,6 +211,8 @@ Site Registryを設定すると、管理画面のサイドバーにサイトセ�
 
 HTTP APIでは、`?site=<site_id>`または`X-CMS-Site: <site_id>`で対象サイトを指定できます。未指定の場合は`default_site`が使われます。
 
+Site Registryは起動時にstrict validationされます。未知のキー、重複した`id`、`id`または`repo_path`の欠落、未対応の`generator`/`runtime`、リポジトリ外を指す`content_dir`・`static_dir`・`public_dir`・media directoryは起動エラーになります。環境変数だけで構成するlegacyのsingle-site設定では、従来のdefault補正と互換性を維持します。
+
 ### サイト内CMS設定
 
 各サイトリポジトリでは、リポジトリ直下の`.homecms.yml`を優先して読み込みます。既存互換として`<static_dir>/admin/config.yml`も利用できますが、両方が存在する場合は`.homecms.yml`が優先されます。

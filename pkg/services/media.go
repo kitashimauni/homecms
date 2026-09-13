@@ -170,7 +170,7 @@ func ListMediaFilesForRuntime(runtime config.SiteRuntime, mode, articlePath stri
 }
 
 func SaveMediaFileForRuntime(runtime config.SiteRuntime, header *multipart.FileHeader, mode, articlePath string) (*MediaFile, error) {
-	unlock := LockRepositoryOperation()
+	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 
 	src, err := header.Open()
@@ -299,7 +299,7 @@ func SaveMediaFileForRuntime(runtime config.SiteRuntime, header *multipart.FileH
 }
 
 func DeleteMediaFileForRuntime(runtime config.SiteRuntime, repoPath string) error {
-	unlock := LockRepositoryOperation()
+	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 
 	if !ValidateMediaRepoPathForRuntime(runtime, repoPath) {

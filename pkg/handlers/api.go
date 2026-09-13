@@ -137,7 +137,7 @@ func SaveArticle(c *gin.Context) {
 		return
 	}
 
-	unlock := services.LockRepositoryOperation()
+	unlock := services.LockRepositoryOperation(runtime)
 	defer unlock()
 
 	var finalContent []byte
@@ -191,7 +191,7 @@ func CreateArticle(c *gin.Context) {
 		return
 	}
 
-	unlock := services.LockRepositoryOperation()
+	unlock := services.LockRepositoryOperation(runtime)
 	defer unlock()
 
 	// New logic: Collection-based creation
@@ -406,7 +406,7 @@ func DeleteArticle(c *gin.Context) {
 		return
 	}
 
-	unlock := services.LockRepositoryOperation()
+	unlock := services.LockRepositoryOperation(runtime)
 	defer unlock()
 
 	currentRevision, err := services.ArticleRevisionForPath(fullPath)

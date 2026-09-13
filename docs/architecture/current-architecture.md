@@ -194,6 +194,8 @@ var (
 
 `SITES_CONFIG_PATH`を指定するとSite Registryを読み込み、default siteの設定を既存APIに適用する。読み込み結果は`GET /admin/api/sites`で確認できる。
 
+Site RegistryはYAMLの未知フィールドを拒否し、site IDの重複、必須値の欠落、未対応のgenerator/runtime、リポジトリ外のdirectory設定を起動時にfail fastで検出する。環境変数由来のlegacy single-site設定は従来のdefault補正を維持する。
+
 ### pkg/models/ - データモデル
 
 #### Article
@@ -329,19 +331,11 @@ func SafeJoin(root, sub, target string) string {
 
 ### キャッシュの排他制御
 
-```go
-var (
-    articleCache []models.Article
-    cacheMutex   sync.Mutex
-    cacheLoaded  bool
-)
+article cacheのmapを守るglobal lockと、各`repo_path + content_dir` keyのrebuild/update lockを分離する。同一keyのrebuildは一つに集約し、WalkDir・Git status・file readなどの高コストI/O中にglobal lockを保持しないため、別siteのcache accessをblockしない。
 
-func GetArticlesCache() ([]models.Article, error) {
-    cacheMutex.Lock()
-    defer cacheMutex.Unlock()
-    // ...
-}
-```
+### Repository操作の排他制御
+
+`LockRepositoryOperation(runtime)`は正規化したrepository pathごとのlock registryを使用する。同一repositoryを参照するsiteはsave/delete、media、Git Sync、publish、draft previewを引き続き直列化し、異なるrepositoryの操作は並行して進められる。lock entryは参照がなくなった時点でregistryから削除する。
 
 ### Hugoサーバーの排他制御
 

@@ -210,7 +210,7 @@ func createAskPassScript() (string, error) {
 }
 
 func SyncRepoForRuntime(runtime config.SiteRuntime, token string) (string, error) {
-	unlock := LockRepositoryOperation()
+	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 
 	log, err := ExecuteGitWithTokenForRuntime(runtime, token, "pull", runtime.GitRemote, runtime.GitBranch)

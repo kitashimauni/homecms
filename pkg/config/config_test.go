@@ -211,6 +211,142 @@ sites:
 	}
 }
 
+func TestLoadSiteRegistryRejectsInvalidEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "unknown top-level field",
+			content: `
+default_site: tech
+unexpected: true
+sites:
+  - id: tech
+    repo_path: ./tech
+`,
+			want: "unexpected",
+		},
+		{
+			name: "unknown site field",
+			content: `
+default_site: tech
+sites:
+  - id: tech
+    repo_path: ./tech
+    genrator: hugo
+`,
+			want: "genrator",
+		},
+		{
+			name: "duplicate site IDs",
+			content: `
+default_site: tech
+sites:
+  - id: tech
+    repo_path: ./tech-a
+  - id: " tech "
+    repo_path: ./tech-b
+`,
+			want: "duplicate site id",
+		},
+		{
+			name: "unsupported generator",
+			content: `
+default_site: tech
+sites:
+  - id: tech
+    repo_path: ./tech
+    generator: jekyll
+`,
+			want: "generator",
+		},
+		{
+			name: "unsupported runtime",
+			content: `
+default_site: tech
+sites:
+  - id: tech
+    repo_path: ./tech
+    runtime: docker
+`,
+			want: "runtime",
+		},
+		{
+			name: "escaping content directory",
+			content: `
+default_site: tech
+sites:
+  - id: tech
+    repo_path: ./tech
+    content_dir: ../outside
+`,
+			want: "content_dir",
+		},
+		{
+			name: "absolute static directory",
+			content: `
+default_site: tech
+sites:
+  - id: tech
+    repo_path: ./tech
+    static_dir: /tmp/static
+`,
+			want: "static_dir",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := loadSiteRegistryFixture(t, tt.content)
+			if err == nil {
+				t.Fatal("loadSiteRegistry() succeeded for invalid registry")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.want)) {
+				t.Fatalf("loadSiteRegistry() error = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func loadSiteRegistryFixture(t *testing.T, content string) error {
+	t.Helper()
+	originalSites := Sites
+	originalDefaultSiteID := DefaultSiteID
+	originalRepoPath := RepoPath
+	originalGenerator := SiteGenerator
+	originalRuntime := GeneratorRuntime
+	originalContentDir := ContentDir
+	originalStaticDir := StaticDir
+	originalPublicDir := PublicDir
+	originalSitesConfigPath := SitesConfigPath
+	t.Cleanup(func() {
+		Sites = originalSites
+		DefaultSiteID = originalDefaultSiteID
+		RepoPath = originalRepoPath
+		SiteGenerator = originalGenerator
+		GeneratorRuntime = originalRuntime
+		ContentDir = originalContentDir
+		StaticDir = originalStaticDir
+		PublicDir = originalPublicDir
+		SitesConfigPath = originalSitesConfigPath
+	})
+
+	configPath := filepath.Join(t.TempDir(), "sites.yml")
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write registry fixture: %v", err)
+	}
+	SitesConfigPath = configPath
+	DefaultSiteID = "default"
+	RepoPath = "./repo"
+	GeneratorRuntime = "direct"
+	ContentDir = "content"
+	StaticDir = "static"
+	PublicDir = "public"
+	return loadSiteRegistry()
+}
+
 func TestNormalizeSiteConfigRejectsUnsafeDirs(t *testing.T) {
 	site := normalizeSiteConfig(SiteConfig{
 		ID:         "unsafe",
