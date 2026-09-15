@@ -118,6 +118,33 @@ func TestLocalPreviewProvidesEmbeddedSurfaceAndFallback(t *testing.T) {
 	}
 }
 
+func TestMobileEditorUsesDynamicViewportAndSafeArea(t *testing.T) {
+	templateContent, err := os.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatalf("read admin template: %v", err)
+	}
+	template := string(templateContent)
+	if !strings.Contains(template, `viewport-fit=cover`) || !strings.Contains(template, `interactive-widget=resizes-content`) {
+		t.Fatal("mobile editor viewport metadata is missing")
+	}
+
+	styleContent, err := os.ReadFile("static/css/style.css")
+	if err != nil {
+		t.Fatalf("read admin stylesheet: %v", err)
+	}
+	style := string(styleContent)
+	for _, marker := range []string{
+		"height: 100dvh",
+		"padding-bottom: env(safe-area-inset-bottom, 0px)",
+		"#editor {",
+		"scroll-padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px))",
+	} {
+		if !strings.Contains(style, marker) {
+			t.Fatalf("mobile editor stylesheet is missing %s", marker)
+		}
+	}
+}
+
 func TestHTTPServerDoesNotCapRequestBodyDuration(t *testing.T) {
 	server := newHTTPServer(http.NotFoundHandler())
 

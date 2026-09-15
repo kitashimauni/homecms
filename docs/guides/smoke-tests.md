@@ -30,6 +30,8 @@ mise run check
 - `/health` が `200`
 - `/ready` がdefault siteの状態を返す
 - `/admin/api/sites` がSite Registryを返す
+- スマホで記事末尾までスクロールでき、下部ブラウザUIやsafe-areaと本文が重ならない
+- スマホでソフトウェアキーボードを表示しても、記事末尾の行へカーソルを移動して編集できる
 
 ## 2. 単一Hugoサイト
 
