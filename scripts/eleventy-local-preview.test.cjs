@@ -13,6 +13,7 @@ const {
   createBuildState,
   createLoopbackServer,
   configureProjectDirectories,
+  enableIncrementalWatch,
   findOutputFile,
   listen,
   parseArguments,
@@ -161,6 +162,30 @@ test("registers Eleventy hooks on the Programmatic API UserConfig", () => {
     () => {},
   );
   assert.equal(typeof handlers["eleventy.after"], "function");
+});
+
+test("passes Eleventy incremental state to the metadata hook", () => {
+  const handlers = {};
+  let updateOptions;
+  configureProjectDirectories(
+    { on(name, callback) { handlers[name] = callback; } },
+    { json: false },
+    () => {},
+    {
+      begin() {},
+      update(_results, options) { updateOptions = options; },
+    },
+  );
+  handlers["eleventy.before"]();
+  handlers["eleventy.after"]({ results: [], incremental: true });
+  assert.deepEqual(updateOptions, { incremental: true });
+});
+
+test("enables incremental builds through the programmatic API when available", () => {
+  let enabled = false;
+  assert.equal(enableIncrementalWatch({ setIncrementalBuild(value) { enabled = value; } }), true);
+  assert.equal(enabled, true);
+  assert.equal(enableIncrementalWatch({}), false);
 });
 
 test("serves output index paths without allowing traversal", () => {
@@ -408,6 +433,40 @@ test("does not mark an older build fresh after a second invalidation", async () 
   }
 });
 
+test("retains unaffected metadata entries across incremental builds", () => {
+  const input = fs.mkdtempSync(path.join(os.tmpdir(), "homecms-eleventy-incremental-map-"));
+  const firstArticle = path.join(input, "posts", "one.md");
+  const secondArticle = path.join(input, "posts", "two.md");
+  fs.mkdirSync(path.dirname(firstArticle), { recursive: true });
+  fs.writeFileSync(firstArticle, "# one\n");
+  fs.writeFileSync(secondArticle, "# two\n");
+  const state = createBuildState(input);
+  const first = { inputPath: firstArticle, outputPath: "/output/posts/one/index.html", url: "/posts/one/" };
+  const second = { inputPath: secondArticle, outputPath: "/output/posts/two/index.html", url: "/posts/two/" };
+  try {
+    state.update([first, second]);
+    state.invalidate("posts/one.md");
+    state.begin();
+    state.update([{ ...first, url: "/posts/changed/" }], { incremental: true });
+    assert.equal(state.get("posts/one.md").url, "/posts/changed/");
+    assert.equal(state.get("posts/two.md").url, "/posts/two/");
+
+    state.invalidate("posts/one.md");
+    state.begin();
+    state.update([], { incremental: true });
+    assert.equal(state.get("posts/one.md"), null);
+
+    state.invalidate("posts/two.md");
+    fs.rmSync(secondArticle);
+    state.begin();
+    state.update([], { incremental: true });
+    assert.equal(state.get("posts/two.md"), null);
+  } finally {
+    state.stopRecovery();
+    fs.rmSync(input, { recursive: true, force: true });
+  }
+});
+
 test("resolves a real Eleventy 3.x project in JSON mode", { skip: !hasRealEleventy() }, () => {
   const fixture = createEleventyFixture();
   try {
@@ -479,9 +538,19 @@ test("builds a clean overlay fixture without modifying production output", { ski
 
 test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEleventy() }, async () => {
   const fixture = createEleventyFixture();
+  const secondArticle = path.join(fixture.input, "posts", "two.md");
   let child;
   let reloadSocket;
   try {
+    fs.writeFileSync(secondArticle, [
+      "---",
+      "title: Two",
+      "permalink: /custom/two/",
+      "---",
+      "",
+      "# {{ title }}",
+      "",
+    ].join("\n"));
     const port = await availablePort();
     const script = path.resolve(__dirname, "eleventy-local-preview.cjs");
     child = childProcess.spawn(process.execPath, [
@@ -507,6 +576,9 @@ test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEle
     const metadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Fone.md");
     assert.equal(metadata.statusCode, 200);
     assert.equal(JSON.parse(metadata.body).url, "/custom/one/");
+    const secondMetadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Ftwo.md");
+    assert.equal(secondMetadata.statusCode, 200);
+    assert.equal(JSON.parse(secondMetadata.body).url, "/custom/two/");
     reloadSocket = await connectReloadSocket(port);
     let reloadReceived = false;
     const reload = new Promise((resolve, reject) => {
@@ -533,6 +605,9 @@ test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEle
     const updatedMetadata = await waitForHTTPStatus(port, "/__homecms_metadata?path=posts%2Fone.md", 200);
     assert.equal(updatedMetadata.statusCode, 200);
     assert.equal(JSON.parse(updatedMetadata.body).url, "/custom/changed/");
+    const retainedMetadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Ftwo.md");
+    assert.equal(retainedMetadata.statusCode, 200);
+    assert.equal(JSON.parse(retainedMetadata.body).url, "/custom/two/");
   } finally {
     reloadSocket?.destroy();
     if (child) {
