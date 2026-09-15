@@ -26,7 +26,16 @@ const RELOAD_SCRIPT = `(() => {
   socket.addEventListener("message", (event) => {
     try {
       const message = JSON.parse(event.data);
-      if (message.type === "eleventy.reload") location.reload();
+      if (message.type === "eleventy.reload") {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({
+            type: "homecms-local-preview-reload",
+            invalidation_generation: message.invalidation_generation,
+            active_build_generation: message.active_build_generation,
+          }, "*");
+        }
+        location.reload();
+      }
     } catch (_) {
       // Ignore malformed development notifications.
     }
@@ -423,7 +432,7 @@ async function main(argv = process.argv.slice(2)) {
   const buildState = options.json ? null : createBuildState(options.input);
   const server = options.json ? null : createLoopbackServer(options.output, buildState);
   let stopping = false;
-  const notify = () => server?.broadcast({ type: "eleventy.reload" });
+  const notify = () => server?.broadcast({ type: "eleventy.reload", ...buildState?.diagnostics?.() });
   if (server) await listen(server, options.port, options.host);
   const eleventy = new Eleventy(options.input, options.output, {
     source: "script",

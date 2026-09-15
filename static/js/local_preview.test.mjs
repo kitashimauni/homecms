@@ -5,8 +5,11 @@ import { createClassList } from "./test_helpers/browser.mjs";
 
 const {
     createLocalPreviewFrameController,
+    isLocalPreviewBuildCoveredByLiveReload,
     LOCAL_PREVIEW_INITIAL_NAVIGATION_MAX_ATTEMPTS,
     localPreviewNavigationRetryDelay,
+    localPreviewFreshReloadKey,
+    shouldReloadEmbeddedLocalPreviewAfterFresh,
     shouldAutoShowEmbeddedLocalPreview,
     shouldCloseEmbeddedLocalPreview,
     shouldRetryLocalPreviewNavigation,
@@ -55,6 +58,74 @@ describe("Local Preview state transitions", () => {
         assert.equal(localPreviewNavigationRetryDelay(2), 750);
         assert.equal(shouldUseLocalPreviewSplitDefault({ enabled: true, narrowViewport: false }), true);
         assert.equal(shouldUseLocalPreviewSplitDefault({ enabled: true, narrowViewport: true }), false);
+    });
+
+    it("reloads same-URL stale previews only after a newer build generation", () => {
+        const stale = {
+            cachedURL: "https://preview.example.test/posts/one/",
+            cachedFresh: false,
+            cachedInvalidationGeneration: 12,
+            cachedActiveBuildGeneration: 11,
+        };
+        assert.equal(shouldReloadEmbeddedLocalPreviewAfterFresh({
+            ...stale,
+            freshURL: stale.cachedURL,
+            freshInvalidationGeneration: 12,
+            freshActiveBuildGeneration: 12,
+        }), true);
+        assert.equal(shouldReloadEmbeddedLocalPreviewAfterFresh({
+            ...stale,
+            freshURL: stale.cachedURL,
+            freshInvalidationGeneration: 12,
+            freshActiveBuildGeneration: 11,
+        }), false);
+        assert.equal(shouldReloadEmbeddedLocalPreviewAfterFresh({
+            ...stale,
+            freshURL: "https://preview.example.test/posts/changed/",
+            freshInvalidationGeneration: 12,
+            freshActiveBuildGeneration: 11,
+        }), true);
+    });
+
+    it("does not reload a fresh preview or repeat a fresh-generation key", () => {
+        assert.equal(shouldReloadEmbeddedLocalPreviewAfterFresh({
+            cachedURL: "https://preview.example.test/posts/one/",
+            freshURL: "https://preview.example.test/posts/one/",
+            cachedFresh: true,
+            cachedInvalidationGeneration: 12,
+            cachedActiveBuildGeneration: 12,
+            freshInvalidationGeneration: 12,
+            freshActiveBuildGeneration: 12,
+        }), false);
+        assert.equal(
+            localPreviewFreshReloadKey({ siteID: "daily-blog", path: "posts/one.md", url: "https://preview.example.test/posts/one/", invalidationGeneration: 12, activeBuildGeneration: 12 }),
+            localPreviewFreshReloadKey({ siteID: "daily-blog", path: "posts/one.md", url: "https://preview.example.test/posts/one/", invalidationGeneration: 12, activeBuildGeneration: 12 }),
+        );
+        assert.notEqual(
+            localPreviewFreshReloadKey({ siteID: "daily-blog", path: "posts/one.md", url: "https://preview.example.test/posts/one/", invalidationGeneration: 12, activeBuildGeneration: 12 }),
+            localPreviewFreshReloadKey({ siteID: "daily-blog", path: "posts/one.md", url: "https://preview.example.test/posts/one/", invalidationGeneration: 13, activeBuildGeneration: 13 }),
+        );
+        const liveReload = { siteID: "daily-blog", path: "posts/one.md", siteGeneration: 4, activeBuildGeneration: 12 };
+        assert.equal(isLocalPreviewBuildCoveredByLiveReload({
+            cachedURL: "https://preview.example.test/posts/one/",
+            freshURL: "https://preview.example.test/posts/one/",
+            siteID: "daily-blog",
+            path: "posts/one.md",
+            siteGeneration: 4,
+            cachedActiveBuildGeneration: 11,
+            freshActiveBuildGeneration: 12,
+            liveReload,
+        }), true);
+        assert.equal(isLocalPreviewBuildCoveredByLiveReload({
+            cachedURL: "https://preview.example.test/posts/one/",
+            freshURL: "https://preview.example.test/posts/changed/",
+            siteID: "daily-blog",
+            path: "posts/one.md",
+            siteGeneration: 4,
+            cachedActiveBuildGeneration: 11,
+            freshActiveBuildGeneration: 12,
+            liveReload,
+        }), false);
     });
 
     it("transitions the embedded frame through loading and fallback states", () => {

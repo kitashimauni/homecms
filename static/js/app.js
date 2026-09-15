@@ -4,8 +4,11 @@ import * as Editor from './editor.js';
 import { createSiteRequestTracker } from './site_request.js';
 import {
     createLocalPreviewFrameController,
+    isLocalPreviewBuildCoveredByLiveReload,
     LOCAL_PREVIEW_INITIAL_NAVIGATION_MAX_ATTEMPTS,
+    localPreviewFreshReloadKey,
     localPreviewNavigationRetryDelay,
+    shouldReloadEmbeddedLocalPreviewAfterFresh,
     shouldAutoShowEmbeddedLocalPreview,
     shouldCloseEmbeddedLocalPreview,
     shouldRetryLocalPreviewNavigation,
@@ -30,10 +33,13 @@ let localPreviewOperationInProgress = false;
 let localPreviewFrameController = null;
 let localPreviewArticleURL = "";
 let localPreviewArticleURLFresh = false;
+let localPreviewArticleURLMetadata = null;
 let localPreviewURLResolutionGeneration = 0;
 let localPreviewFrontMatterKey = "";
 let localPreviewArticleURLKey = "";
 let localPreviewURLResolution = null;
+let localPreviewFreshReloadKeySeen = "";
+let localPreviewLiveReload = null;
 const siteRequestTracker = createSiteRequestTracker();
 
 const LOCAL_PREVIEW_POLL_MS = 3000;
@@ -169,8 +175,11 @@ function resetLocalPreviewArticleURL() {
     localPreviewURLResolutionGeneration += 1;
     localPreviewArticleURL = "";
     localPreviewArticleURLFresh = false;
+    localPreviewArticleURLMetadata = null;
     localPreviewArticleURLKey = "";
     localPreviewFrontMatterKey = "";
+    localPreviewFreshReloadKeySeen = "";
+    localPreviewLiveReload = null;
 }
 
 async function loadSiteData(siteID = API.getCurrentSite(), request = null) {
@@ -370,6 +379,7 @@ function initializeLocalPreviewFrame() {
     frame.addEventListener('load', handleLocalPreviewFrameLoad);
     frame.addEventListener('error', () => localPreviewFrameController?.handleError());
     window.addEventListener('message', handleLocalPreviewReadyMessage);
+    window.addEventListener('message', handleLocalPreviewLiveReloadMessage);
 }
 
 function handleLocalPreviewReadyMessage(event) {
@@ -384,6 +394,26 @@ function handleLocalPreviewReadyMessage(event) {
     }
     if (event.origin !== origin || event.data?.type !== 'homecms-local-preview-ready') return;
     localPreviewFrameController?.handleReady();
+}
+
+function handleLocalPreviewLiveReloadMessage(event) {
+    const frame = document.getElementById('local-preview-frame');
+    const url = localPreviewURL();
+    if (!frame || !url || event.source !== frame.contentWindow || event.data?.type !== 'homecms-local-preview-reload') return;
+    let origin;
+    try {
+        origin = new URL(url).origin;
+    } catch (_) {
+        return;
+    }
+    if (event.origin !== origin) return;
+    localPreviewLiveReload = {
+        siteID: API.getCurrentSite(),
+        siteGeneration: siteRequestTracker.generation,
+        path: Editor.getCurrentPath(),
+        invalidationGeneration: Number(event.data?.invalidation_generation) || 0,
+        activeBuildGeneration: Number(event.data?.active_build_generation) || 0,
+    };
 }
 
 function handleLocalPreviewFrameLoad() {
@@ -516,6 +546,7 @@ function resolveLocalPreviewArticleURLState(
                 ) return null;
                 localPreviewArticleURL = articleURL;
                 localPreviewArticleURLFresh = fresh;
+                localPreviewArticleURLMetadata = result;
                 localPreviewArticleURLKey = requestKey;
                 return { url: articleURL, fresh, result, generation: requestGeneration };
             } catch (error) {
@@ -536,7 +567,11 @@ function resolveLocalPreviewArticleURLState(
     return resolution.promise;
 }
 
-function reconcileFreshLocalPreviewArticleURL(frontMatterKey, cachedURL, { siteID = API.getCurrentSite(), siteGeneration = siteRequestTracker.generation } = {}) {
+function reconcileFreshLocalPreviewArticleURL(
+    frontMatterKey,
+    cachedURL,
+    { cachedMetadata = localPreviewArticleURLMetadata, siteID = API.getCurrentSite(), siteGeneration = siteRequestTracker.generation } = {},
+) {
     const requestPath = Editor.getCurrentPath();
     if (!requestPath || !cachedURL || !isCurrentSiteContext(siteID, siteGeneration)) return;
     void resolveLocalPreviewArticleURLState(frontMatterKey, { requireFresh: true, siteID, siteGeneration }).then((resolution) => {
@@ -546,9 +581,38 @@ function reconcileFreshLocalPreviewArticleURL(frontMatterKey, cachedURL, { siteI
             resolution.generation !== localPreviewURLResolutionGeneration ||
             !isCurrentSiteContext(siteID, siteGeneration)
         ) return;
-        if (resolution.url !== cachedURL && !localPreviewFrameController?.isDismissed()) {
-            showEmbeddedLocalPreview({ reload: true });
-        }
+        const freshMetadata = resolution.result || {};
+        const reloadKey = localPreviewFreshReloadKey({
+            siteID,
+            path: requestPath,
+            url: resolution.url,
+            invalidationGeneration: freshMetadata.invalidation_generation,
+            activeBuildGeneration: freshMetadata.active_build_generation,
+        });
+        if (!shouldReloadEmbeddedLocalPreviewAfterFresh({
+            cachedURL,
+            freshURL: resolution.url,
+            cachedFresh: cachedMetadata?.fresh === true,
+            cachedInvalidationGeneration: cachedMetadata?.invalidation_generation,
+            cachedActiveBuildGeneration: cachedMetadata?.active_build_generation,
+            freshInvalidationGeneration: freshMetadata.invalidation_generation,
+            freshActiveBuildGeneration: freshMetadata.active_build_generation,
+        })) return;
+        if (localPreviewFreshReloadKeySeen === reloadKey || localPreviewFrameController?.isDismissed()) return;
+
+        if (isLocalPreviewBuildCoveredByLiveReload({
+            cachedURL,
+            freshURL: resolution.url,
+            siteID,
+            path: requestPath,
+            siteGeneration,
+            cachedActiveBuildGeneration: cachedMetadata?.active_build_generation,
+            freshActiveBuildGeneration: freshMetadata.active_build_generation,
+            liveReload: localPreviewLiveReload,
+        })) return;
+
+        localPreviewFreshReloadKeySeen = reloadKey;
+        showEmbeddedLocalPreview({ reload: true });
     }).catch((error) => {
         if (error?.name !== 'AbortError') console.warn('[LocalPreview] fresh URL reconciliation failed', error);
     });
@@ -558,7 +622,7 @@ async function resolveLocalPreviewArticleURL(frontMatterKey = localPreviewFrontM
     const resolution = await resolveLocalPreviewArticleURLState(frontMatterKey, context);
     if (context.siteID && !isCurrentSiteContext(context.siteID, context.siteGeneration)) return null;
     if (resolution?.url && !resolution.fresh) {
-        reconcileFreshLocalPreviewArticleURL(frontMatterKey, resolution.url, context);
+        reconcileFreshLocalPreviewArticleURL(frontMatterKey, resolution.url, { ...context, cachedMetadata: resolution.result });
     }
     return resolution?.url || null;
 }
@@ -575,11 +639,12 @@ async function refreshLocalPreviewArticleURL(updateResult, frontMatterKey = "") 
     }
     localPreviewFrontMatterKey = frontMatterKey;
     if (localPreviewArticleURL && localPreviewArticleURLKey === requestKey && !localPreviewArticleURLFresh) {
-        reconcileFreshLocalPreviewArticleURL(frontMatterKey, localPreviewArticleURL, context);
+        reconcileFreshLocalPreviewArticleURL(frontMatterKey, localPreviewArticleURL, { ...context, cachedMetadata: localPreviewArticleURLMetadata });
         return localPreviewArticleURL;
     }
     localPreviewArticleURL = "";
     localPreviewArticleURLFresh = false;
+    localPreviewArticleURLMetadata = null;
     localPreviewArticleURLKey = "";
     if (!localPreviewEnabled || !Editor.getCurrentPath()) return null;
     try {
