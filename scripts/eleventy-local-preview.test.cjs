@@ -500,6 +500,10 @@ test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEle
     assert.equal(JSON.parse(building.body).status, "building");
     const page = await waitForHTTP(port, "/custom/one/");
     assert.match(page.body, /__homecms_reload\.js/);
+    const reloadScript = await requestHTTP(port, "/__homecms_reload.js");
+    assert.equal(reloadScript.statusCode, 200);
+    assert.match(reloadScript.body, /homecms-local-preview-reload/);
+    assert.match(reloadScript.body, /postMessage/);
     const metadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Fone.md");
     assert.equal(metadata.statusCode, 200);
     assert.equal(JSON.parse(metadata.body).url, "/custom/one/");
@@ -509,6 +513,7 @@ test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEle
       const deadline = setTimeout(() => reject(new Error("Timed out waiting for Eleventy LiveReload")), 15000);
       reloadSocket.on("data", (chunk) => {
         if (chunk.toString("utf8").includes('"type":"eleventy.reload"')) {
+          assert.match(chunk.toString("utf8"), /"active_build_generation":/);
           clearTimeout(deadline);
           reloadReceived = true;
           resolve();
