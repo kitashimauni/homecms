@@ -74,6 +74,16 @@ function normalizeMetadataPath(value) {
   return value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/^\/+/, "");
 }
 
+function readFrontMatter(filePath) {
+  try {
+    const source = fs.readFileSync(filePath, "utf8");
+    const match = source.match(/^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\r?\n/);
+    return match ? match[0] : "";
+  } catch (_) {
+    return null;
+  }
+}
+
 function createBuildState(input) {
   const state = {
     inputRoot: path.resolve(process.cwd(), input),
@@ -84,7 +94,10 @@ function createBuildState(input) {
     activeBuildGeneration: 0,
     invalidationAt: 0,
     invalidationPath: "",
+    invalidationSnapshot: null,
     lastBuildCompletedAt: 0,
+    hasCompletedBuild: false,
+    buildIncremental: false,
     recoveryTimer: null,
   };
   const clearRecoveryTimer = () => {
@@ -120,37 +133,65 @@ function createBuildState(input) {
     state.recoveryTimer = setTimeout(recover, WATCH_RECOVERY_DELAY_MS);
     state.recoveryTimer.unref?.();
   };
-  state.begin = () => {
+  state.begin = ({ incremental = false } = {}) => {
     state.activeBuildGeneration = state.invalidationGeneration;
     state.ready = false;
     state.building = true;
+    state.buildIncremental = incremental;
   };
-  state.update = (results) => {
-    const entries = new Map();
+  state.shouldUseIncrementalBuild = () => {
+    if (!state.hasCompletedBuild || !state.invalidationPath || state.invalidationPath === ".") return false;
+    const metadataPath = normalizeMetadataPath(state.invalidationPath);
+    const snapshot = state.invalidationSnapshot;
+    if (!state.entries.has(metadataPath) || snapshot?.path !== metadataPath) return false;
+    const currentFrontMatter = readFrontMatter(path.resolve(state.inputRoot, metadataPath));
+    return currentFrontMatter !== null && currentFrontMatter === snapshot.frontMatter;
+  };
+  state.wasIncrementalBuild = () => state.buildIncremental;
+  state.update = (results, { incremental = false } = {}) => {
+    const entries = incremental && state.hasCompletedBuild
+      ? new Map(state.entries)
+      : new Map();
+    const updatedPaths = new Set();
     for (const result of Array.isArray(results) ? results : []) {
       const inputPath = typeof result?.inputPath === "string" ? result.inputPath : "";
-      const url = typeof result?.url === "string"
-        ? result.url
-        : typeof result?.data?.page?.url === "string" ? result.data.page.url : "";
-      if (!inputPath || !url) continue;
+      if (!inputPath) continue;
       const absoluteInputPath = path.resolve(process.cwd(), inputPath);
       const relativeInputPath = path.relative(state.inputRoot, absoluteInputPath);
       if (!relativeInputPath || relativeInputPath.startsWith(".." + path.sep) || path.isAbsolute(relativeInputPath)) {
         continue;
       }
-      entries.set(normalizeMetadataPath(relativeInputPath), {
+      const metadataPath = normalizeMetadataPath(relativeInputPath);
+      updatedPaths.add(metadataPath);
+      const url = typeof result?.url === "string"
+        ? result.url
+        : typeof result?.data?.page?.url === "string" ? result.data.page.url : "";
+      if (!url) {
+        entries.delete(metadataPath);
+        continue;
+      }
+      entries.set(metadataPath, {
         inputPath,
         outputPath: result.outputPath || "",
         url,
       });
     }
+    if (incremental && state.invalidationPath && state.invalidationPath !== ".") {
+      const invalidatedPath = path.resolve(state.inputRoot, state.invalidationPath);
+      const invalidatedMetadataPath = normalizeMetadataPath(state.invalidationPath);
+      if (!fs.existsSync(invalidatedPath) || (entries.has(invalidatedMetadataPath) && !updatedPaths.has(invalidatedMetadataPath))) {
+        entries.delete(invalidatedMetadataPath);
+      }
+    }
     state.entries = entries;
     state.ready = state.activeBuildGeneration >= state.invalidationGeneration;
     state.building = !state.ready;
     state.lastBuildCompletedAt = Date.now();
+    state.hasCompletedBuild = true;
     if (state.ready) {
       state.invalidationAt = 0;
       state.invalidationPath = "";
+      state.invalidationSnapshot = null;
       clearRecoveryTimer();
     }
   };
@@ -164,6 +205,12 @@ function createBuildState(input) {
     state.invalidationPath = articlePath && relativeArticlePath && !relativeArticlePath.startsWith(".." + path.sep) && !path.isAbsolute(relativeArticlePath)
       ? normalizeMetadataPath(relativeArticlePath)
       : ".";
+    state.invalidationSnapshot = state.invalidationPath === "."
+      ? null
+      : {
+        path: state.invalidationPath,
+        frontMatter: readFrontMatter(path.resolve(state.inputRoot, state.invalidationPath)),
+      };
     clearRecoveryTimer();
     scheduleRecovery();
     return state.invalidationGeneration;
@@ -186,14 +233,33 @@ function createBuildState(input) {
   return state;
 }
 
-function configureProjectDirectories(eleventyConfig, options, notify, buildState) {
+function configureProjectDirectories(eleventyConfig, options, notify, buildState, watchRuntime) {
   if (!options.json) {
-    eleventyConfig.on("eleventy.before", () => buildState?.begin());
+    eleventyConfig.on("eleventy.before", (event) => {
+      const incremental = buildState?.shouldUseIncrementalBuild?.() ?? event?.incremental === true;
+      if (event && typeof event === "object") event.incremental = incremental;
+      if (!incremental) setIncrementalWatch(watchRuntime?.eleventy, false);
+      buildState?.begin({ incremental });
+    });
     eleventyConfig.on("eleventy.after", (event) => {
-      buildState?.update(event?.results);
+      const incremental = buildState?.wasIncrementalBuild?.() ?? event?.incremental === true;
+      buildState?.update(event?.results, { incremental });
+      if (!incremental) enableIncrementalWatch(watchRuntime?.eleventy);
       notify(event);
     });
   }
+}
+
+function setIncrementalWatch(eleventy, enabled) {
+  if (typeof eleventy?.setIncrementalBuild !== "function") return false;
+  eleventy.setIncrementalBuild(enabled);
+  if (eleventy.watchManager) eleventy.watchManager.incremental = enabled;
+  if (!enabled) eleventy.writer?.resetIncrementalFile?.();
+  return true;
+}
+
+function enableIncrementalWatch(eleventy) {
+  return setIncrementalWatch(eleventy, true);
 }
 
 function getEleventyClass() {
@@ -431,6 +497,7 @@ async function main(argv = process.argv.slice(2)) {
   const Eleventy = getEleventyClass();
   const buildState = options.json ? null : createBuildState(options.input);
   const server = options.json ? null : createLoopbackServer(options.output, buildState);
+  const watchRuntime = { eleventy: null };
   let stopping = false;
   const notify = () => server?.broadcast({ type: "eleventy.reload", ...buildState?.diagnostics?.() });
   if (server) await listen(server, options.port, options.host);
@@ -438,8 +505,9 @@ async function main(argv = process.argv.slice(2)) {
     source: "script",
     runMode: options.json ? "build" : "serve",
     quietMode: options.json,
-    config: (eleventyConfig) => configureProjectDirectories(eleventyConfig, options, notify, buildState),
+    config: (eleventyConfig) => configureProjectDirectories(eleventyConfig, options, notify, buildState, watchRuntime),
   });
+  watchRuntime.eleventy = eleventy;
 
   if (options.json) {
     const result = await eleventy.toJSON();
@@ -449,6 +517,7 @@ async function main(argv = process.argv.slice(2)) {
 
   try {
     await eleventy.init();
+    enableIncrementalWatch(eleventy);
     await eleventy.watch();
   } catch (error) {
     buildState?.stopRecovery?.();
@@ -479,6 +548,7 @@ module.exports = {
   createBuildState,
   configureProjectDirectories,
   createLoopbackServer,
+  enableIncrementalWatch,
   findOutputFile,
   listen,
   parseArguments,

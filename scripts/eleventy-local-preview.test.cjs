@@ -13,6 +13,7 @@ const {
   createBuildState,
   createLoopbackServer,
   configureProjectDirectories,
+  enableIncrementalWatch,
   findOutputFile,
   listen,
   parseArguments,
@@ -153,6 +154,21 @@ function connectReloadSocket(port) {
   });
 }
 
+function waitForReload(socket) {
+  return new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error("Timed out waiting for Eleventy LiveReload")), 15000);
+    const onData = (chunk) => {
+      if (chunk.toString("utf8").includes('"type":"eleventy.reload"')) {
+        clearTimeout(deadline);
+        socket.off("data", onData);
+        resolve();
+      }
+    };
+    socket.on("data", onData);
+    socket.once("error", reject);
+  });
+}
+
 test("registers Eleventy hooks on the Programmatic API UserConfig", () => {
   const handlers = {};
   configureProjectDirectories(
@@ -161,6 +177,30 @@ test("registers Eleventy hooks on the Programmatic API UserConfig", () => {
     () => {},
   );
   assert.equal(typeof handlers["eleventy.after"], "function");
+});
+
+test("passes Eleventy incremental state to the metadata hook", () => {
+  const handlers = {};
+  let updateOptions;
+  configureProjectDirectories(
+    { on(name, callback) { handlers[name] = callback; } },
+    { json: false },
+    () => {},
+    {
+      begin() {},
+      update(_results, options) { updateOptions = options; },
+    },
+  );
+  handlers["eleventy.before"]();
+  handlers["eleventy.after"]({ results: [], incremental: true });
+  assert.deepEqual(updateOptions, { incremental: true });
+});
+
+test("enables incremental builds through the programmatic API when available", () => {
+  let enabled = false;
+  assert.equal(enableIncrementalWatch({ setIncrementalBuild(value) { enabled = value; } }), true);
+  assert.equal(enabled, true);
+  assert.equal(enableIncrementalWatch({}), false);
 });
 
 test("serves output index paths without allowing traversal", () => {
@@ -408,6 +448,66 @@ test("does not mark an older build fresh after a second invalidation", async () 
   }
 });
 
+test("retains unaffected metadata entries across incremental builds", () => {
+  const input = fs.mkdtempSync(path.join(os.tmpdir(), "homecms-eleventy-incremental-map-"));
+  const firstArticle = path.join(input, "posts", "one.md");
+  const secondArticle = path.join(input, "posts", "two.md");
+  fs.mkdirSync(path.dirname(firstArticle), { recursive: true });
+  fs.writeFileSync(firstArticle, "# one\n");
+  fs.writeFileSync(secondArticle, "# two\n");
+  const state = createBuildState(input);
+  const first = { inputPath: firstArticle, outputPath: "/output/posts/one/index.html", url: "/posts/one/" };
+  const second = { inputPath: secondArticle, outputPath: "/output/posts/two/index.html", url: "/posts/two/" };
+  try {
+    state.update([first, second]);
+    state.invalidate("posts/one.md");
+    state.begin();
+    state.update([{ ...first, url: "/posts/changed/" }], { incremental: true });
+    assert.equal(state.get("posts/one.md").url, "/posts/changed/");
+    assert.equal(state.get("posts/two.md").url, "/posts/two/");
+
+    state.invalidate("posts/one.md");
+    state.begin();
+    state.update([], { incremental: true });
+    assert.equal(state.get("posts/one.md"), null);
+
+    state.invalidate("posts/two.md");
+    fs.rmSync(secondArticle);
+    state.begin();
+    state.update([], { incremental: true });
+    assert.equal(state.get("posts/two.md"), null);
+  } finally {
+    state.stopRecovery();
+    fs.rmSync(input, { recursive: true, force: true });
+  }
+});
+
+test("only allows incremental builds for body-only changes to known articles", () => {
+  const input = fs.mkdtempSync(path.join(os.tmpdir(), "homecms-eleventy-incremental-policy-"));
+  const article = path.join(input, "posts", "one.md");
+  fs.mkdirSync(path.dirname(article), { recursive: true });
+  fs.writeFileSync(article, "---\ntitle: One\n---\n\n# one\n");
+  const state = createBuildState(input);
+  try {
+    state.update([{ inputPath: article, outputPath: "/output/posts/one/index.html", url: "/posts/one/" }]);
+
+    state.invalidate("posts/one.md");
+    fs.writeFileSync(article, "---\ntitle: Changed\n---\n\n# one\n");
+    assert.equal(state.shouldUseIncrementalBuild(), false);
+
+    state.invalidate("posts/one.md");
+    fs.writeFileSync(article, "---\ntitle: Changed\n---\n\n# body changed\n");
+    assert.equal(state.shouldUseIncrementalBuild(), true);
+
+    state.invalidate("posts/new.md");
+    fs.writeFileSync(path.join(input, "posts", "new.md"), "---\ntitle: New\n---\n\n# new\n");
+    assert.equal(state.shouldUseIncrementalBuild(), false);
+  } finally {
+    state.stopRecovery();
+    fs.rmSync(input, { recursive: true, force: true });
+  }
+});
+
 test("resolves a real Eleventy 3.x project in JSON mode", { skip: !hasRealEleventy() }, () => {
   const fixture = createEleventyFixture();
   try {
@@ -479,9 +579,19 @@ test("builds a clean overlay fixture without modifying production output", { ski
 
 test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEleventy() }, async () => {
   const fixture = createEleventyFixture();
+  const secondArticle = path.join(fixture.input, "posts", "two.md");
   let child;
   let reloadSocket;
   try {
+    fs.writeFileSync(secondArticle, [
+      "---",
+      "title: Two",
+      "permalink: /custom/two/",
+      "---",
+      "",
+      "# {{ title }}",
+      "",
+    ].join("\n"));
     const port = await availablePort();
     const script = path.resolve(__dirname, "eleventy-local-preview.cjs");
     child = childProcess.spawn(process.execPath, [
@@ -500,6 +610,9 @@ test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEle
     assert.equal(JSON.parse(building.body).status, "building");
     const page = await waitForHTTP(port, "/custom/one/");
     assert.match(page.body, /__homecms_reload\.js/);
+    const index = await waitForHTTP(port, "/");
+    assert.match(index.body, /\/custom\/one\//);
+    assert.match(index.body, /\/custom\/two\//);
     const reloadScript = await requestHTTP(port, "/__homecms_reload.js");
     assert.equal(reloadScript.statusCode, 200);
     assert.match(reloadScript.body, /homecms-local-preview-reload/);
@@ -507,32 +620,39 @@ test("starts real Eleventy serve and broadcasts LiveReload", { skip: !hasRealEle
     const metadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Fone.md");
     assert.equal(metadata.statusCode, 200);
     assert.equal(JSON.parse(metadata.body).url, "/custom/one/");
+    const secondMetadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Ftwo.md");
+    assert.equal(secondMetadata.statusCode, 200);
+    assert.equal(JSON.parse(secondMetadata.body).url, "/custom/two/");
     reloadSocket = await connectReloadSocket(port);
-    let reloadReceived = false;
-    const reload = new Promise((resolve, reject) => {
-      const deadline = setTimeout(() => reject(new Error("Timed out waiting for Eleventy LiveReload")), 15000);
-      reloadSocket.on("data", (chunk) => {
-        if (chunk.toString("utf8").includes('"type":"eleventy.reload"')) {
-          assert.match(chunk.toString("utf8"), /"active_build_generation":/);
-          clearTimeout(deadline);
-          reloadReceived = true;
-          resolve();
-        }
-      });
-      reloadSocket.once("error", reject);
-    });
+    const bodyReload = waitForReload(reloadSocket);
     const invalidated = await requestHTTP(port, "/__homecms_invalidate?path=posts%2Fone.md", "POST");
     assert.equal(invalidated.statusCode, 202);
     const invalidatedMetadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Fone.md");
     assert.equal(invalidatedMetadata.statusCode, 200);
     assert.equal(JSON.parse(invalidatedMetadata.body).status, "stale");
     assert.equal(JSON.parse(invalidatedMetadata.body).fresh, false);
+    fs.writeFileSync(fixture.article, ["---", "title: One", "permalink: /custom/one/", "---", "", "# Body only", ""].join("\n"));
+    await bodyReload;
+    const bodyPage = await waitForHTTP(port, "/custom/one/");
+    assert.match(bodyPage.body, /Body only/);
+    const bodyIndex = await waitForHTTP(port, "/");
+    assert.match(bodyIndex.body, /\/custom\/one\//);
+    assert.match(bodyIndex.body, /\/custom\/two\//);
+
+    const frontMatterReload = waitForReload(reloadSocket);
+    await requestHTTP(port, "/__homecms_invalidate?path=posts%2Fone.md", "POST");
     const updatedArticle = ["---", "title: Changed", "permalink: /custom/changed/", "---", "", "# {{ title }}", ""].join("\n");
     fs.writeFileSync(fixture.article, updatedArticle);
-    await reload;
+    await frontMatterReload;
     const updatedMetadata = await waitForHTTPStatus(port, "/__homecms_metadata?path=posts%2Fone.md", 200);
     assert.equal(updatedMetadata.statusCode, 200);
     assert.equal(JSON.parse(updatedMetadata.body).url, "/custom/changed/");
+    const updatedIndex = await waitForHTTP(port, "/");
+    assert.match(updatedIndex.body, /\/custom\/changed\//);
+    assert.doesNotMatch(updatedIndex.body, /\/custom\/one\//);
+    const retainedMetadata = await requestHTTP(port, "/__homecms_metadata?path=posts%2Ftwo.md");
+    assert.equal(retainedMetadata.statusCode, 200);
+    assert.equal(JSON.parse(retainedMetadata.body).url, "/custom/two/");
   } finally {
     reloadSocket?.destroy();
     if (child) {
