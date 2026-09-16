@@ -8,6 +8,7 @@ const {
     normalizeDeploymentState,
     normalizeLocalPreviewState,
     safeExternalURL,
+    setPreviewEngine,
     switchView,
 } = await import("./ui.js");
 
@@ -83,6 +84,23 @@ describe("view surface integration", () => {
             switchView("split");
             assert.equal(harness.contentArea.classList.contains("split-mode"), true);
             assert.equal(harness.editView.style.display, "flex");
+            assert.equal(harness.localPreviewView.style.display, "flex");
+        } finally {
+            harness.restore();
+        }
+    });
+
+    it("switches preview engines without changing the current layout", () => {
+        const harness = createViewHarness({ localPreviewEnabled: true });
+        try {
+            switchView("split");
+            setPreviewEngine("markdown");
+            assert.equal(harness.contentArea.classList.contains("split-mode"), true);
+            assert.equal(harness.previewView.style.display, "block");
+            assert.equal(harness.localPreviewView.style.display, "none");
+            setPreviewEngine("local");
+            assert.equal(harness.contentArea.classList.contains("split-mode"), true);
+            assert.equal(harness.previewView.style.display, "none");
             assert.equal(harness.localPreviewView.style.display, "flex");
         } finally {
             harness.restore();

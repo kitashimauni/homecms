@@ -26,6 +26,7 @@ let deploymentController = null;
 let deploymentOperationInProgress = false;
 let deploymentOperation = null;
 let localPreviewEnabled = false;
+let previewEngine = 'markdown';
 let localPreviewState = null;
 let localPreviewPollTimer = null;
 let localPreviewController = null;
@@ -157,7 +158,8 @@ async function init() {
     window.markDeploymentPreviewStale = markDeploymentPreviewStale;
     window.openLocalLivePreview = openLocalLivePreview;
     window.toggleEmbeddedLocalPreview = toggleEmbeddedLocalPreview;
-    window.showMarkdownFallback = () => switchView('markdown');
+    window.switchPreviewEngine = switchPreviewEngine;
+    window.showMarkdownFallback = () => switchPreviewEngine('markdown');
     window.stopLocalLivePreview = stopLocalLivePreview;
     window.refreshLocalPreviewArticleURL = refreshLocalPreviewArticleURL;
 
@@ -206,6 +208,8 @@ async function loadSiteData(siteID = API.getCurrentSite(), request = null) {
 
     localPreviewEnabled = cmsConfig?._cms?.local_preview?.enabled === true && Boolean(localPreviewURL());
     configureLocalPreviewPanel();
+    previewEngine = localPreviewEnabled ? 'local' : 'markdown';
+    UI.setPreviewEngine(previewEngine);
     UI.switchView('edit');
     if (localPreviewEnabled) {
         await refreshLocalPreviewStatus(siteID, request, generation);
@@ -275,6 +279,7 @@ async function switchSite(siteID) {
 async function loadFile(path) {
     const siteID = API.getCurrentSite();
     const generation = siteRequestTracker.generation;
+    const hadCurrentPath = Boolean(Editor.getCurrentPath());
     stopDeploymentPolling();
     deploymentState = null;
     UI.renderDeploymentState(null);
@@ -286,13 +291,15 @@ async function loadFile(path) {
     }
 
     resetLocalPreviewArticleURL();
-    if (localPreviewEnabled) {
+    if (localPreviewEnabled && previewEngine === 'local') {
         localPreviewFrameController?.resetDismissed();
         updateLocalPreviewAvailability();
-        UI.switchView(shouldUseLocalPreviewSplitDefault({
-            enabled: localPreviewEnabled,
-            narrowViewport: isNarrowViewport(),
-        }) ? 'split' : 'edit');
+        if (!hadCurrentPath) {
+            UI.switchView(shouldUseLocalPreviewSplitDefault({
+                enabled: localPreviewEnabled,
+                narrowViewport: isNarrowViewport(),
+            }) ? 'split' : 'edit');
+        }
         try {
             await Editor.refreshLocalLivePreview();
             if (!isCurrentSiteContext(siteID, generation)) return;
@@ -327,7 +334,11 @@ async function refreshFileList(siteID = API.getCurrentSite(), request = null, ge
 }
 
 async function switchView(viewName) {
-    if ((viewName === 'preview' && !localPreviewEnabled) || viewName === 'markdown') {
+    if (viewName === 'markdown') {
+        await switchPreviewEngine('markdown');
+        return;
+    }
+    if ((viewName === 'preview' || viewName === 'split') && previewEngine === 'markdown') {
         try {
             await Editor.refreshMarkdownPreview();
         } catch (_) {
@@ -335,6 +346,40 @@ async function switchView(viewName) {
         }
     }
     UI.switchView(viewName);
+}
+
+async function switchPreviewEngine(engine) {
+    if (engine === 'local' && !localPreviewEnabled) {
+        UI.showToast('Local Live Preview is not configured', 'warning');
+        return;
+    }
+    previewEngine = engine === 'local' ? 'local' : 'markdown';
+    UI.setPreviewEngine(previewEngine);
+    if (previewEngine === 'markdown') {
+        try {
+            await Editor.refreshMarkdownPreview();
+        } catch (_) {
+            // The Markdown preview surface already shows the request error.
+        }
+        return;
+    }
+
+    const siteID = API.getCurrentSite();
+    const siteGeneration = siteRequestTracker.generation;
+    const isCurrent = () => isCurrentSiteContext(siteID, siteGeneration);
+    if (!Editor.getCurrentPath() || !isCurrent()) return;
+    try {
+        await Editor.refreshLocalLivePreview();
+        if (!isCurrent()) return;
+        const articleURL = await resolveLocalPreviewArticleURL(Editor.getCurrentLocalPreviewFrontMatterKey(), { siteID, siteGeneration });
+        if (!isCurrent()) return;
+        if (!articleURL) throw new Error('generatorから記事URLを取得できませんでした');
+        showEmbeddedLocalPreview({ reload: true });
+        await refreshLocalPreviewStatus(siteID, null, siteGeneration);
+    } catch (error) {
+        if (!isCurrent()) return;
+        showLocalPreviewResolutionError(error);
+    }
 }
 
 function localPreviewURL() {
