@@ -200,6 +200,7 @@ export async function runSync() {
             ...getCSRFHeaders()
         }
     });
+    if (!res.ok) throw await responseError(res, "Sync failed");
     return await res.json();
 }
 

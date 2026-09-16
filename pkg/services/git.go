@@ -3,8 +3,10 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hugo-cms/pkg/config"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -14,6 +16,10 @@ import (
 	"strings"
 	"time"
 )
+
+var ErrGitSyncConflict = errors.New("git sync conflict")
+
+type syncGitFunc func(config.SiteRuntime, string, ...string) (string, error)
 
 func CheckSemanticDiffForRuntime(runtime config.SiteRuntime, relPath string) (bool, error) {
 	gitPath := filepath.ToSlash(relPath)
@@ -210,14 +216,248 @@ func createAskPassScript() (string, error) {
 }
 
 func SyncRepoForRuntime(runtime config.SiteRuntime, token string) (string, error) {
+	return syncRepoForRuntime(runtime, token, ExecuteGitWithTokenForRuntime)
+}
+
+type syncUntrackedBackup struct {
+	originalPath string
+	backupPath   string
+	fileMode     os.FileMode
+}
+
+func copySyncBackupFile(sourcePath, destinationPath string, mode os.FileMode) error {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	destination, err := os.OpenFile(destinationPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		return err
+	}
+	if err := destination.Chmod(mode.Perm()); err != nil {
+		_ = destination.Close()
+		return err
+	}
+	return destination.Close()
+}
+
+func prepareEquivalentUntrackedBackups(runtime config.SiteRuntime, token string, git syncGitFunc, pathsOutput string) (string, []syncUntrackedBackup, error) {
+	backupRoot, err := os.MkdirTemp("", "homecms-git-sync-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create sync backup directory: %w", err)
+	}
+	backups := make([]syncUntrackedBackup, 0)
+	restore := func() error {
+		if err := restoreSyncUntrackedBackups(backups); err != nil {
+			return err
+		}
+		return os.RemoveAll(backupRoot)
+	}
+
+	for _, rawPath := range strings.Split(pathsOutput, "\x00") {
+		if rawPath == "" {
+			continue
+		}
+		gitPath := filepath.ToSlash(filepath.Clean(rawPath))
+		localPath := SafeJoin(runtime.RepoPath, "", gitPath)
+		if localPath == "" {
+			continue
+		}
+		fileInfo, statErr := os.Lstat(localPath)
+		if statErr != nil || !fileInfo.Mode().IsRegular() {
+			continue
+		}
+		localContent, readErr := os.ReadFile(localPath)
+		if readErr != nil {
+			continue
+		}
+		remoteContent, showErr := git(runtime, token, "show", "FETCH_HEAD:"+gitPath)
+		if showErr != nil || !bytes.Equal(localContent, []byte(remoteContent)) {
+			continue
+		}
+
+		backupPath := filepath.Join(backupRoot, filepath.FromSlash(gitPath))
+		if err := os.MkdirAll(filepath.Dir(backupPath), 0755); err != nil {
+			restoreErr := restore()
+			if restoreErr != nil {
+				return "", nil, fmt.Errorf("prepare sync backup for %s: %w; restore failed: %v", gitPath, err, restoreErr)
+			}
+			return "", nil, fmt.Errorf("prepare sync backup for %s: %w", gitPath, err)
+		}
+		if err := copySyncBackupFile(localPath, backupPath, fileInfo.Mode()); err != nil {
+			restoreErr := restore()
+			if restoreErr != nil {
+				return "", nil, fmt.Errorf("prepare sync backup for %s: %w; restore failed: %v", gitPath, err, restoreErr)
+			}
+			return "", nil, fmt.Errorf("prepare sync backup for %s: %w", gitPath, err)
+		}
+		if err := os.Remove(localPath); err != nil {
+			_ = os.Remove(backupPath)
+			restoreErr := restore()
+			if restoreErr != nil {
+				return "", nil, fmt.Errorf("prepare sync backup for %s: %w; restore failed: %v", gitPath, err, restoreErr)
+			}
+			return "", nil, fmt.Errorf("prepare sync backup for %s: %w", gitPath, err)
+		}
+		backups = append(backups, syncUntrackedBackup{originalPath: localPath, backupPath: backupPath, fileMode: fileInfo.Mode()})
+	}
+
+	if len(backups) == 0 {
+		_ = os.RemoveAll(backupRoot)
+		return "", nil, nil
+	}
+	return backupRoot, backups, nil
+}
+
+func restoreSyncUntrackedBackups(backups []syncUntrackedBackup) error {
+	for i := len(backups) - 1; i >= 0; i-- {
+		backup := backups[i]
+		if _, err := os.Lstat(backup.backupPath); err != nil {
+			continue
+		}
+		if err := os.Remove(backup.originalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(backup.originalPath), 0755); err != nil {
+			return err
+		}
+		if err := copySyncBackupFile(backup.backupPath, backup.originalPath, backup.fileMode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func syncRepoForRuntime(runtime config.SiteRuntime, token string, git syncGitFunc) (string, error) {
 	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 
-	log, err := ExecuteGitWithTokenForRuntime(runtime, token, "pull", runtime.GitRemote, runtime.GitBranch)
-	if err == nil {
-		InvalidateCacheForRuntime(runtime)
+	var logs []string
+	appendLog := func(output string) {
+		if trimmed := strings.TrimSpace(output); trimmed != "" {
+			logs = append(logs, trimmed)
+		}
 	}
-	return log, err
+	run := func(args ...string) (string, error) {
+		output, err := git(runtime, token, args...)
+		appendLog(output)
+		return output, err
+	}
+	logOutput := func() string { return strings.Join(logs, "\n") }
+
+	originalHead, err := run("rev-parse", "HEAD^{commit}")
+	if err != nil {
+		return logOutput(), fmt.Errorf("resolve local branch: %w", err)
+	}
+	originalHead = strings.TrimSpace(originalHead)
+	if err := validateCommitSHA(originalHead); err != nil {
+		return logOutput(), fmt.Errorf("local branch returned invalid commit: %w", err)
+	}
+	if _, err := run("fetch", "--no-tags", runtime.GitRemote, runtime.GitBranch); err != nil {
+		return logOutput(), fmt.Errorf("fetch remote branch: %w", err)
+	}
+	remoteHead, err := run("rev-parse", "FETCH_HEAD^{commit}")
+	if err != nil {
+		return logOutput(), fmt.Errorf("resolve fetched branch: %w", err)
+	}
+	if err := validateCommitSHA(strings.TrimSpace(remoteHead)); err != nil {
+		return logOutput(), fmt.Errorf("fetched branch returned invalid commit: %w", err)
+	}
+	dirtyOutput, err := git(runtime, token, "status", "--porcelain=v1", "-z")
+	if err != nil {
+		return logOutput(), fmt.Errorf("inspect local changes: %w", err)
+	}
+	hasLocalChanges := len(dirtyOutput) > 0
+	if !hasLocalChanges {
+		if _, err := run("merge", "--ff-only", "FETCH_HEAD"); err != nil {
+			return logOutput(), fmt.Errorf("%w: local branch cannot be fast-forwarded to the remote branch", ErrGitSyncConflict)
+		}
+		InvalidateCacheForRuntime(runtime)
+		return logOutput(), nil
+	}
+
+	untrackedOutput, err := git(runtime, token, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return logOutput(), fmt.Errorf("inspect untracked changes: %w", err)
+	}
+	backupRoot, untrackedBackups, err := prepareEquivalentUntrackedBackups(runtime, token, git, untrackedOutput)
+	if err != nil {
+		return logOutput(), err
+	}
+	cleanupBackups := func(restore bool) error {
+		if restore {
+			if err := restoreSyncUntrackedBackups(untrackedBackups); err != nil {
+				return err
+			}
+		}
+		if backupRoot != "" {
+			return os.RemoveAll(backupRoot)
+		}
+		return nil
+	}
+
+	remainingChanges, err := git(runtime, token, "status", "--porcelain=v1", "-z")
+	if err != nil {
+		_ = cleanupBackups(true)
+		return logOutput(), fmt.Errorf("inspect remaining local changes: %w", err)
+	}
+	if len(remainingChanges) == 0 {
+		if _, err := run("merge", "--ff-only", "FETCH_HEAD"); err != nil {
+			if restoreErr := cleanupBackups(true); restoreErr != nil {
+				return logOutput(), fmt.Errorf("sync failed and restoring local untracked changes failed: %w", restoreErr)
+			}
+			return logOutput(), fmt.Errorf("%w: local branch cannot be fast-forwarded to the remote branch", ErrGitSyncConflict)
+		}
+		if err := cleanupBackups(false); err != nil {
+			return logOutput(), fmt.Errorf("clean up sync backup: %w", err)
+		}
+		InvalidateCacheForRuntime(runtime)
+		return logOutput(), nil
+	}
+
+	if _, err := run("stash", "push", "--include-untracked", "--message", "HomeCMS Git Sync local changes"); err != nil {
+		_ = cleanupBackups(true)
+		return logOutput(), fmt.Errorf("stash local changes before sync: %w", err)
+	}
+	restoreStash := func() error {
+		_, restoreErr := run("stash", "pop")
+		return restoreErr
+	}
+	if _, err := run("merge", "--ff-only", "FETCH_HEAD"); err != nil {
+		if restoreErr := restoreStash(); restoreErr != nil {
+			_ = cleanupBackups(true)
+			return logOutput(), fmt.Errorf("sync failed and restoring local changes failed: %w", restoreErr)
+		}
+		if restoreErr := cleanupBackups(true); restoreErr != nil {
+			return logOutput(), fmt.Errorf("sync failed and restoring local untracked changes failed: %w", restoreErr)
+		}
+		return logOutput(), fmt.Errorf("%w: local branch cannot be fast-forwarded to the remote branch", ErrGitSyncConflict)
+	}
+	if _, err := run("stash", "pop"); err != nil {
+		if _, resetErr := run("reset", "--hard", originalHead); resetErr != nil {
+			_ = cleanupBackups(true)
+			return logOutput(), fmt.Errorf("%w: conflict occurred and restoring the local branch failed: %v", ErrGitSyncConflict, resetErr)
+		}
+		if _, restoreErr := run("stash", "pop"); restoreErr != nil {
+			_ = cleanupBackups(true)
+			return logOutput(), fmt.Errorf("%w: conflict occurred and restoring local changes failed: %v", ErrGitSyncConflict, restoreErr)
+		}
+		if restoreErr := cleanupBackups(true); restoreErr != nil {
+			return logOutput(), fmt.Errorf("%w: conflict occurred and restoring local untracked changes failed: %v", ErrGitSyncConflict, restoreErr)
+		}
+		return logOutput(), fmt.Errorf("%w: local changes conflict with remote updates", ErrGitSyncConflict)
+	}
+	if err := cleanupBackups(false); err != nil {
+		return logOutput(), fmt.Errorf("clean up sync backup: %w", err)
+	}
+	InvalidateCacheForRuntime(runtime)
+	return logOutput(), nil
 }
 
 func DiffForRuntime(runtime config.SiteRuntime, f1Path, f2Path, relPath string) (string, string) {
