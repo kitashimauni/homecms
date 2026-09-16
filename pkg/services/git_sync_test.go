@@ -50,6 +50,32 @@ func TestSyncRepoPreservesUnpublishedTrackedAndUntrackedChanges(t *testing.T) {
 	}
 }
 
+func TestSyncRepoReconcilesUntrackedFilesThatAlreadyExistOnRemote(t *testing.T) {
+	runtime, remoteWork := setupSyncRepository(t)
+	paths := map[string]string{
+		"content/published-locally.md":        "published article\n",
+		"static/images/published-locally.png": "published image bytes\n",
+	}
+	for path, content := range paths {
+		writeSyncTestFile(t, filepath.Join(runtime.RepoPath, filepath.FromSlash(path)), content)
+		writeSyncTestFile(t, filepath.Join(remoteWork, filepath.FromSlash(path)), content)
+	}
+	commitSyncTestChanges(t, remoteWork, "publish local files remotely")
+	runSyncGitCommand(t, remoteWork, "push", "origin", "main")
+
+	if _, err := syncRepoForRuntime(runtime, "token", localSyncGit(t)); err != nil {
+		t.Fatalf("syncRepoForRuntime() error = %v", err)
+	}
+	if status := strings.TrimSpace(runSyncGitOutput(t, runtime.RepoPath, "status", "--porcelain")); status != "" {
+		t.Fatalf("status after sync = %q, want clean", status)
+	}
+	for path, want := range paths {
+		if got := readSyncTestFile(t, filepath.Join(runtime.RepoPath, filepath.FromSlash(path))); got != want {
+			t.Errorf("synced %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func TestSyncRepoReportsConflictWithoutDiscardingLocalContent(t *testing.T) {
 	runtime, remoteWork := setupSyncRepository(t)
 	writeSyncTestFile(t, filepath.Join(runtime.RepoPath, "content", "selected.md"), "local conflicting change\n")
@@ -89,7 +115,7 @@ func setupSyncRepository(t *testing.T) (config.SiteRuntime, string) {
 	commitSyncTestChanges(t, repoPath, "initial")
 	runSyncGitCommand(t, repoPath, "remote", "add", "origin", remotePath)
 	runSyncGitCommand(t, repoPath, "push", "-u", "origin", "main")
-	runSyncGitCommand(t, remoteWork, "clone", remotePath, ".")
+	runSyncGitCommand(t, remoteWork, "clone", "-b", "main", remotePath, ".")
 	runSyncGitCommand(t, remoteWork, "config", "user.name", "Sync Test")
 	runSyncGitCommand(t, remoteWork, "config", "user.email", "sync@example.com")
 
