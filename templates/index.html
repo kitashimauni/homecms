@@ -101,6 +101,10 @@
                             <span id="local-preview-status" class="deployment-status idle">停止</span>
                         </div>
                         <span class="local-preview-caption">編集中のサイト表示</span>
+                        <div class="preview-engine-switcher" role="group" aria-label="Preview方式">
+                            <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="local" aria-pressed="true" onclick="switchPreviewEngine('local')">Local</button>
+                            <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="markdown" aria-pressed="false" onclick="switchPreviewEngine('markdown')">Markdown</button>
+                        </div>
                     </div>
                     <div id="local-preview-message" class="deployment-message" aria-live="polite">
                         記事を選択すると未保存内容をpreviewへ反映します。
@@ -139,6 +143,13 @@
             </section>
 
             <div id="preview-view">
+                <div class="markdown-preview-toolbar">
+                    <strong>Markdown Preview</strong>
+                    <div class="preview-engine-switcher" role="group" aria-label="Preview方式">
+                        <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="local" aria-pressed="false" onclick="switchPreviewEngine('local')">Local</button>
+                        <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="markdown" aria-pressed="true" onclick="switchPreviewEngine('markdown')">Markdown</button>
+                    </div>
+                </div>
                 <div class="markdown-preview-notice" role="note">
                     Markdown本文の簡易表示です。generator固有のtemplate、shortcode、サイト固有CSS/JavaScriptは再現しません。
                 </div>

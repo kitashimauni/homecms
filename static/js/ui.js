@@ -1,77 +1,70 @@
 // ui.js - 画面描画ロジック
 import * as API from './api.js';
 
-export function switchView(viewName) {
-    const contentArea = document.getElementById('content-area');
-    if (viewName === 'split') {
-        applySplitView(contentArea);
-        return;
-    }
+function normalizePreviewEngine(contentArea, engine = contentArea.dataset.previewEngine) {
+    const requested = engine || (contentArea.classList.contains('local-preview-enabled') ? 'local' : 'markdown');
+    return requested === 'local' && contentArea.classList.contains('local-preview-enabled') ? 'local' : 'markdown';
+}
 
-    contentArea.classList.remove('split-mode', 'local-preview-view-mode');
-    const editView = document.getElementById('edit-view');
-    const previewView = document.getElementById('preview-view');
-    const localPreviewView = document.getElementById('local-preview-view');
-    editView.style.display = 'none';
-    previewView.style.display = 'none';
-    localPreviewView.style.display = 'none';
-
-    if (viewName === 'edit') {
-        editView.style.display = 'flex';
-    } else if (viewName === 'preview') {
-        if (contentArea.classList.contains('local-preview-enabled')) {
-            contentArea.classList.add('local-preview-view-mode');
-            localPreviewView.style.display = 'flex';
-        } else {
-            previewView.style.display = 'block';
-        }
-    } else if (viewName === 'markdown') {
-        previewView.style.display = 'block';
-    }
-
-    contentArea.dataset.viewMode = viewName === 'markdown' ? 'preview' : viewName;
-    document.getElementById('btn-view-split').classList.remove('active');
-
-    const toggles = document.querySelectorAll('.view-toggle');
-    toggles.forEach(btn => {
-        if (btn.id === 'btn-view-' + (viewName === 'markdown' ? 'preview' : viewName)) {
-            btn.classList.add('active');
-        } else {
-            btn.classList.remove('active');
-        }
+function updatePreviewEngineControls(contentArea) {
+    const engine = normalizePreviewEngine(contentArea);
+    document.querySelectorAll('[data-preview-engine]').forEach(button => {
+        const buttonEngine = button.dataset?.previewEngine;
+        button.classList.toggle('active', buttonEngine === engine);
+        if (typeof button.setAttribute === 'function') button.setAttribute('aria-pressed', String(buttonEngine === engine));
+        if (buttonEngine === 'local') button.disabled = !contentArea.classList.contains('local-preview-enabled');
     });
 }
 
-function applySplitView(contentArea) {
-    const localPreviewEnabled = contentArea.classList.contains('local-preview-enabled');
+function renderView(contentArea) {
+    const viewName = contentArea.dataset.viewMode || 'edit';
+    const engine = normalizePreviewEngine(contentArea);
     const editView = document.getElementById('edit-view');
     const previewView = document.getElementById('preview-view');
     const localPreviewView = document.getElementById('local-preview-view');
 
-    contentArea.classList.remove('local-preview-view-mode');
-    contentArea.classList.add('split-mode');
-    editView.style.display = 'flex';
-    previewView.style.display = localPreviewEnabled ? 'none' : 'block';
-    localPreviewView.style.display = localPreviewEnabled ? 'flex' : 'none';
-    contentArea.dataset.viewMode = 'split';
+    contentArea.dataset.previewEngine = engine;
+    contentArea.classList.toggle('split-mode', viewName === 'split');
+    contentArea.classList.toggle('local-preview-view-mode', viewName === 'preview' && engine === 'local');
+    contentArea.classList.toggle('preview-engine-local', engine === 'local');
+    contentArea.classList.toggle('preview-engine-markdown', engine === 'markdown');
+    editView.style.display = viewName === 'edit' || viewName === 'split' ? 'flex' : 'none';
+    previewView.style.display = viewName !== 'edit' && engine === 'markdown' ? 'block' : 'none';
+    localPreviewView.style.display = viewName !== 'edit' && engine === 'local' ? 'flex' : 'none';
 
-    document.getElementById('btn-view-split').classList.add('active');
-    document.getElementById('btn-view-edit').classList.remove('active');
-    document.getElementById('btn-view-preview').classList.remove('active');
+    document.querySelectorAll('.view-toggle').forEach(button => {
+        const active = button.id === `btn-view-${viewName === 'split' ? 'split' : viewName === 'preview' ? 'preview' : 'edit'}`;
+        button.classList.toggle('active', active);
+    });
+    updatePreviewEngineControls(contentArea);
 
-    // Trigger the simple preview build only when it is the active split surface.
-    if (!localPreviewEnabled && window.buildAndPreview) window.buildAndPreview();
+}
+
+export function switchView(viewName) {
+    const contentArea = document.getElementById('content-area');
+    if (viewName === 'markdown') {
+        setPreviewEngine('markdown');
+        return;
+    }
+    if (!['edit', 'preview', 'split'].includes(viewName)) return;
+    contentArea.dataset.viewMode = viewName;
+    renderView(contentArea);
+}
+
+export function setPreviewEngine(engine) {
+    const contentArea = document.getElementById('content-area');
+    contentArea.dataset.previewEngine = engine;
+    renderView(contentArea);
+}
+
+export function getPreviewEngine() {
+    const contentArea = document.getElementById('content-area');
+    return normalizePreviewEngine(contentArea);
 }
 
 export function toggleSplitView() {
     const contentArea = document.getElementById('content-area');
-    const isSplit = contentArea.classList.toggle('split-mode');
-
-    if (isSplit) {
-        applySplitView(contentArea);
-    } else {
-        switchView('edit');
-    }
+    switchView(contentArea.dataset.viewMode === 'split' ? 'edit' : 'split');
 }
 
 export function toggleSidebar() {

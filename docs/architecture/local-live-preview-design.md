@@ -278,6 +278,7 @@ Stop時はgenerator process groupの停止と`cmd.Wait()`完了後にworkspace�
 
 - Local Live Previewを開く/新規tab導線（埋め込みを主導線、新規tabをfallback）
 - desktopの編集+埋め込みpreview並列表示と狭い画面での上下配置
+- viewレイアウト（`Edit` / `Preview` / `Split`）とPreview方式（`Local` / `Markdown`）を分離し、`Split`内を含めて方式だけを切り替えるUI
 - iframe loading、応答未確認のbest-effort表示、新規tab fallback。preview側がCMS originをtarget originに指定して`homecms-local-preview-ready`の`postMessage`を送る場合は明示的なready通知として扱う
 - 記事選択時の`PreviewURLResolver`によるgenerator準拠の実ページURL解決と、解決済みURLのiframe/新規タブ表示
 - Local Preview有効siteの`Edit` / `Preview` / `Split`統合。無効siteではMarkdown Previewを維持

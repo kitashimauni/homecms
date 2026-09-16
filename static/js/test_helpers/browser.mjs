@@ -22,6 +22,12 @@ export function createClassList(...initial) {
     return {
         add(...items) { items.forEach(value => values.add(value)); },
         remove(...items) { items.forEach(value => values.delete(value)); },
+        toggle(value, force) {
+            const next = force === undefined ? !values.has(value) : force;
+            if (next) values.add(value);
+            else values.delete(value);
+            return next;
+        },
         contains(value) { return values.has(value); },
     };
 }
