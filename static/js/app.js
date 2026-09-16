@@ -10,6 +10,7 @@ import {
     localPreviewNavigationRetryDelay,
     shouldReloadEmbeddedLocalPreviewAfterFresh,
     shouldAutoShowEmbeddedLocalPreview,
+    shouldAutoExpandLocalPreviewDetails,
     shouldCloseEmbeddedLocalPreview,
     shouldRetryLocalPreviewNavigation,
     shouldUseLocalPreviewSplitDefault,
@@ -730,6 +731,7 @@ function localPreviewGeneratorLabel(state) {
 }
 
 function renderLocalPreviewState(state) {
+    const previousStatus = localPreviewState?.status;
     localPreviewState = UI.normalizeLocalPreviewState(state);
     state = localPreviewState;
     const statusEl = document.getElementById('local-preview-status');
@@ -737,9 +739,11 @@ function renderLocalPreviewState(state) {
     const policyEl = document.getElementById('local-preview-policy');
     const loadingEl = document.getElementById('local-preview-loading');
     const stopBtn = document.getElementById('local-preview-stop-btn');
+    const detailsEl = document.getElementById('local-preview-details');
     if (!statusEl || !messageEl) return;
 
     const status = state?.status || 'stopped';
+    if (detailsEl && shouldAutoExpandLocalPreviewDetails({ status, previousStatus })) detailsEl.open = true;
     statusEl.textContent = localPreviewStatusLabel(status);
     statusEl.className = `deployment-status ${localPreviewStatusClass(status)}`;
 

@@ -11,6 +11,7 @@ const {
     localPreviewFreshReloadKey,
     shouldReloadEmbeddedLocalPreviewAfterFresh,
     shouldAutoShowEmbeddedLocalPreview,
+    shouldAutoExpandLocalPreviewDetails,
     shouldCloseEmbeddedLocalPreview,
     shouldRetryLocalPreviewNavigation,
     shouldUseLocalPreviewSplitDefault,
@@ -48,6 +49,12 @@ describe("Local Preview state transitions", () => {
         assert.equal(shouldAutoShowEmbeddedLocalPreview({ status: "starting", hasCurrentPath: true, dismissed: false }), true);
         assert.equal(shouldAutoShowEmbeddedLocalPreview({ status: "ready", hasCurrentPath: true, dismissed: true }), false);
         assert.equal(shouldAutoShowEmbeddedLocalPreview({ status: "stopped", hasCurrentPath: true, dismissed: false }), false);
+    });
+
+    it("only auto-expands details when the runtime enters a failed state", () => {
+        assert.equal(shouldAutoExpandLocalPreviewDetails({ status: "failed", previousStatus: "ready" }), true);
+        assert.equal(shouldAutoExpandLocalPreviewDetails({ status: "failed", previousStatus: "failed" }), false);
+        assert.equal(shouldAutoExpandLocalPreviewDetails({ status: "ready", previousStatus: "failed" }), false);
     });
 
     it("bounds transient navigation retries and keeps Split desktop-only", () => {
