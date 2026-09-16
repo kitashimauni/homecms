@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hugo-cms/pkg/config"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -221,6 +222,29 @@ func SyncRepoForRuntime(runtime config.SiteRuntime, token string) (string, error
 type syncUntrackedBackup struct {
 	originalPath string
 	backupPath   string
+	fileMode     os.FileMode
+}
+
+func copySyncBackupFile(sourcePath, destinationPath string, mode os.FileMode) error {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	destination, err := os.OpenFile(destinationPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		return err
+	}
+	if err := destination.Chmod(mode.Perm()); err != nil {
+		_ = destination.Close()
+		return err
+	}
+	return destination.Close()
 }
 
 func prepareEquivalentUntrackedBackups(runtime config.SiteRuntime, token string, git syncGitFunc, pathsOutput string) (string, []syncUntrackedBackup, error) {
@@ -245,6 +269,10 @@ func prepareEquivalentUntrackedBackups(runtime config.SiteRuntime, token string,
 		if localPath == "" {
 			continue
 		}
+		fileInfo, statErr := os.Lstat(localPath)
+		if statErr != nil || !fileInfo.Mode().IsRegular() {
+			continue
+		}
 		localContent, readErr := os.ReadFile(localPath)
 		if readErr != nil {
 			continue
@@ -262,14 +290,22 @@ func prepareEquivalentUntrackedBackups(runtime config.SiteRuntime, token string,
 			}
 			return "", nil, fmt.Errorf("prepare sync backup for %s: %w", gitPath, err)
 		}
-		if err := os.Rename(localPath, backupPath); err != nil {
+		if err := copySyncBackupFile(localPath, backupPath, fileInfo.Mode()); err != nil {
 			restoreErr := restore()
 			if restoreErr != nil {
 				return "", nil, fmt.Errorf("prepare sync backup for %s: %w; restore failed: %v", gitPath, err, restoreErr)
 			}
 			return "", nil, fmt.Errorf("prepare sync backup for %s: %w", gitPath, err)
 		}
-		backups = append(backups, syncUntrackedBackup{originalPath: localPath, backupPath: backupPath})
+		if err := os.Remove(localPath); err != nil {
+			_ = os.Remove(backupPath)
+			restoreErr := restore()
+			if restoreErr != nil {
+				return "", nil, fmt.Errorf("prepare sync backup for %s: %w; restore failed: %v", gitPath, err, restoreErr)
+			}
+			return "", nil, fmt.Errorf("prepare sync backup for %s: %w", gitPath, err)
+		}
+		backups = append(backups, syncUntrackedBackup{originalPath: localPath, backupPath: backupPath, fileMode: fileInfo.Mode()})
 	}
 
 	if len(backups) == 0 {
@@ -291,7 +327,7 @@ func restoreSyncUntrackedBackups(backups []syncUntrackedBackup) error {
 		if err := os.MkdirAll(filepath.Dir(backup.originalPath), 0755); err != nil {
 			return err
 		}
-		if err := os.Rename(backup.backupPath, backup.originalPath); err != nil {
+		if err := copySyncBackupFile(backup.backupPath, backup.originalPath, backup.fileMode); err != nil {
 			return err
 		}
 	}
