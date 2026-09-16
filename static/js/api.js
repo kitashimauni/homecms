@@ -203,14 +203,14 @@ export async function runSync() {
     return await res.json();
 }
 
-export async function runPublish(path, draftID, siteID = currentSite) {
+export async function runPublish(path, draftID, siteID = currentSite, mode = 'preview') {
     const res = await fetchWithCSRF(withSite('/admin/api/publish', siteID), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             ...siteHeaders(siteID)
         },
-        body: JSON.stringify({ path, draft_id: draftID })
+        body: JSON.stringify({ path, draft_id: draftID, mode })
     });
     if (!res.ok) throw new Error("Publish failed");
     return await res.json();

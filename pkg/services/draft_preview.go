@@ -531,6 +531,78 @@ func PublishDraftPreview(ctx context.Context, runtime config.SiteRuntime, token,
 	return publishDraftPreview(ctx, runtime, token, draftID, requestedArticlePath, store, provider, remoteDraftBranchCommit, CreateDraftPreviewPullRequest)
 }
 
+// PublishArticle creates a draft PR from the current production working tree.
+// It deliberately does not consult Deployment Preview state, so publishing
+// remains available when that optional integration is disabled or unavailable.
+func PublishArticle(ctx context.Context, runtime config.SiteRuntime, token, draftID, requestedArticlePath string, paths []string) (string, error) {
+	return publishArticle(ctx, runtime, token, draftID, requestedArticlePath, paths, func(_ string, pushToken string, args ...string) (string, error) {
+		return ExecuteGitWithTokenForRuntime(runtime, pushToken, args...)
+	}, remoteDraftBranchCommit, CreateArticlePullRequest)
+}
+
+func publishArticle(ctx context.Context, runtime config.SiteRuntime, token, draftID, requestedArticlePath string, paths []string, push gitPushFunc, remoteHead draftPreviewRemoteHeadFunc, createPullRequest draftPreviewPullRequestFunc) (string, error) {
+	if push == nil || remoteHead == nil || createPullRequest == nil {
+		return "", fmt.Errorf("article publish dependencies are required")
+	}
+	if strings.TrimSpace(runtime.ID) == "" {
+		return "", fmt.Errorf("site ID is required")
+	}
+	if err := validateDraftID(draftID); err != nil {
+		return "", err
+	}
+	articlePath, err := normalizeDraftArticlePath(runtime, requestedArticlePath)
+	if err != nil {
+		return "", err
+	}
+	validatedPaths, err := validateDraftPaths(runtime.RepoPath, paths)
+	if err != nil {
+		return "", err
+	}
+	if validatedPaths[0] != draftArticleRepoPath(runtime, articlePath) {
+		return "", fmt.Errorf("draft paths do not match article path")
+	}
+
+	unlockOperation := lockDraftPreviewOperation(runtime.ID, draftID)
+	defer unlockOperation()
+
+	branch, commitSHA, err := commitAndPushDraftPreview(ctx, runtime, token, draftID, validatedPaths, push)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	state := DraftPreviewState{
+		SiteID:      runtime.ID,
+		DraftID:     draftID,
+		ArticlePath: articlePath,
+		Paths:       append([]string(nil), validatedPaths...),
+		Branch:      branch,
+		CommitSHA:   commitSHA,
+		Status:      PreviewDeploymentReady,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	remoteCommit, err := remoteHead(ctx, runtime, token, state.Branch)
+	if err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(remoteCommit, state.CommitSHA) {
+		return "", ErrDraftPreviewBranchMoved
+	}
+	pullRequestURL, err := createPullRequest(ctx, runtime, token, state)
+	if err != nil {
+		return "", err
+	}
+	remoteCommit, err = remoteHead(ctx, runtime, token, state.Branch)
+	if err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(remoteCommit, state.CommitSHA) {
+		return "", ErrDraftPreviewBranchMoved
+	}
+	return pullRequestURL, nil
+}
+
 func publishDraftPreview(ctx context.Context, runtime config.SiteRuntime, token, draftID, requestedArticlePath string, store *DraftPreviewStore, provider PreviewDeploymentProvider, remoteHead draftPreviewRemoteHeadFunc, createPullRequest draftPreviewPullRequestFunc) (string, error) {
 	if store == nil || provider == nil || remoteHead == nil || createPullRequest == nil {
 		return "", fmt.Errorf("draft preview publish dependencies are required")

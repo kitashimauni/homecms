@@ -19,6 +19,7 @@ const {
     prepareForGitSync,
     refreshLocalLivePreview,
     runGitMutation,
+    setArticlePathChangeListener,
     setConfig,
     waitForLocalPreviewUpdates,
 } = await import("./editor.js");
@@ -76,6 +77,20 @@ describe("Local Preview destructive operations", () => {
         rejectUpdate(new Error("preview update failed"));
         await switching;
         assert.equal(getCurrentPath(), "");
+    });
+
+    it("notifies Publish visibility when an article is loaded or cleared", async () => {
+        const harness = createArticleSwitchHarness();
+        const changedPaths = [];
+        setArticlePathChangeListener(path => changedPaths.push(path));
+        try {
+            await loadFile("posts/old.md");
+            clearEditor();
+            assert.deepEqual(changedPaths, ["posts/old.md", ""]);
+        } finally {
+            setArticlePathChangeListener(null);
+            harness.restore();
+        }
     });
 
     function createArticleSwitchHarness({ generator = "hugo", previewFailure = null, saveFailure = false, saveResponse = null, articleResponses = new Map(), markdownResponses = new Map(), localPreviewResponses = new Map() } = {}) {

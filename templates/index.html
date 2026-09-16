@@ -41,6 +41,7 @@
                 
                 <div class="header-actions">
                     <button class="action-btn" onclick="saveFile()">💾 <span>Save</span></button>
+                    <button id="publish-btn" class="action-btn success hidden" onclick="publishFile()">🚀 <span>Publish</span></button>
                     
                     <div class="desktop-actions">
                         <button class="action-btn secondary" onclick="insertImage()">🖼️ <span>Image</span></button>
@@ -81,7 +82,6 @@
                 <button id="deployment-discard-btn" class="action-btn danger hidden" onclick="discardDeploymentPreview()">破棄</button>
                 <a id="deployment-open-link" class="deployment-link hidden">デプロイプレビューを開く</a>
                 <a id="deployment-log-link" class="deployment-link hidden">ビルドログを開く</a>
-                <button id="publish-preview-btn" class="action-btn success hidden" onclick="publishFile()">PRを作成して公開へ進む</button>
             </div>
         </section>
 

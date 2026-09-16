@@ -91,6 +91,31 @@ func TestCreateDraftPreviewPullRequestRejectsMismatchedExistingOrCreatedHead(t *
 	}
 }
 
+func TestCreateArticlePullRequestDoesNotRequirePreviewURL(t *testing.T) {
+	repo := t.TempDir()
+	runGitForPullRequestTest(t, repo, "init")
+	runGitForPullRequestTest(t, repo, "remote", "add", "origin", "https://github.com/example/site.git")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"html_url":"https://github.com/example/site/pull/108","head":{"sha":"` + testCommitSHA + `"}}`))
+	}))
+	defer server.Close()
+
+	runtime := config.SiteRuntime{ID: "site", RepoPath: repo, GitRemote: "origin", GitBranch: "main"}
+	state := DraftPreviewState{SiteID: "site", DraftID: "draft-direct", Branch: "cms-preview/draft-direct", ArticlePath: "posts/hello.md", Paths: []string{"content/posts/hello.md"}, CommitSHA: testCommitSHA, Status: PreviewDeploymentReady}
+	got, err := createArticlePullRequest(context.Background(), runtime, "test-token", state, githubPullRequestClient{baseURL: server.URL, httpClient: server.Client()})
+	if err != nil {
+		t.Fatalf("createArticlePullRequest() error = %v", err)
+	}
+	if got != "https://github.com/example/site/pull/108" {
+		t.Fatalf("URL = %q", got)
+	}
+}
+
 func runGitForPullRequestTest(t *testing.T, directory string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
