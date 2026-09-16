@@ -217,6 +217,34 @@ func TestPublishDraftPreviewRejectsDifferentArticleAndMovedRemoteBranch(t *testi
 	}
 }
 
+func TestPublishArticleCreatesPRWithoutDeploymentPreview(t *testing.T) {
+	runtime, remotePath := setupDraftPreviewRepository(t)
+	writeDraftTestFile(t, filepath.Join(runtime.RepoPath, "content", "selected.md"), "published directly\n")
+
+	remoteHead := func(_ context.Context, _ config.SiteRuntime, _ string, branch string) (string, error) {
+		return strings.TrimSpace(runGitOutputForDraftTest(t, remotePath, "rev-parse", "refs/heads/"+branch)), nil
+	}
+	var publishedState DraftPreviewState
+	createPR := func(_ context.Context, _ config.SiteRuntime, _ string, state DraftPreviewState) (string, error) {
+		publishedState = state
+		return "https://github.com/example/site/pull/108", nil
+	}
+
+	url, err := publishArticle(context.Background(), runtime, "token", "draft-direct", "selected.md", []string{"content/selected.md"}, localDraftPush(t, runtime), remoteHead, createPR)
+	if err != nil {
+		t.Fatalf("publishArticle() error = %v", err)
+	}
+	if url != "https://github.com/example/site/pull/108" {
+		t.Fatalf("URL = %q", url)
+	}
+	if publishedState.Status != PreviewDeploymentReady || publishedState.URL != "" {
+		t.Fatalf("direct publish state = %#v", publishedState)
+	}
+	if publishedState.ArticlePath != "selected.md" || publishedState.Paths[0] != "content/selected.md" {
+		t.Fatalf("published paths = %#v", publishedState)
+	}
+}
+
 func TestPublishDraftPreviewHoldsDraftLockThroughPullRequestCreation(t *testing.T) {
 	runtime, _ := setupDraftPreviewRepository(t)
 	writeDraftTestFile(t, filepath.Join(runtime.RepoPath, "content", "selected.md"), "reviewed\n")

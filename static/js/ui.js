@@ -616,7 +616,6 @@ export function renderDeploymentState(rawState) {
     const updateButton = document.getElementById('deployment-update-btn');
     const retryButton = document.getElementById('deployment-retry-btn');
     const discardButton = document.getElementById('deployment-discard-btn');
-    const publishButton = document.getElementById('publish-preview-btn');
     if (!status) return;
 
     const inProgress = state?.status === 'queued' || state?.status === 'building';
@@ -636,7 +635,6 @@ export function renderDeploymentState(rawState) {
     if (updateButton) updateButton.disabled = inProgress;
     if (retryButton) retryButton.classList.toggle('hidden', state?.status !== 'failed' || state?.retryable === false);
     if (discardButton) discardButton.classList.toggle('hidden', !state);
-    if (publishButton) publishButton.classList.toggle('hidden', state?.status !== 'ready' || !state.url);
 }
 
 function setExternalLink(link, url, label) {

@@ -35,12 +35,25 @@ func CreateDraftPreviewPullRequest(ctx context.Context, runtime config.SiteRunti
 	})
 }
 
+// CreateArticlePullRequest creates a draft PR for the current article without
+// requiring a Deployment Preview provider or URL.
+func CreateArticlePullRequest(ctx context.Context, runtime config.SiteRuntime, token string, state DraftPreviewState) (string, error) {
+	return createArticlePullRequest(ctx, runtime, token, state, githubPullRequestClient{
+		baseURL:    githubAPIBaseURL,
+		httpClient: &http.Client{Timeout: 15 * time.Second},
+	})
+}
+
 func createDraftPreviewPullRequest(ctx context.Context, runtime config.SiteRuntime, token string, state DraftPreviewState, client githubPullRequestClient) (string, error) {
-	if strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("GitHub token is required")
-	}
 	if state.Status != PreviewDeploymentReady || state.URL == "" {
 		return "", fmt.Errorf("draft preview must be ready before creating a pull request")
+	}
+	return createArticlePullRequest(ctx, runtime, token, state, client)
+}
+
+func createArticlePullRequest(ctx context.Context, runtime config.SiteRuntime, token string, state DraftPreviewState, client githubPullRequestClient) (string, error) {
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("GitHub token is required")
 	}
 	if state.SiteID != runtime.ID || state.Branch != previewBranchPrefix+state.DraftID {
 		return "", fmt.Errorf("draft preview does not belong to the selected site")
@@ -76,13 +89,19 @@ func createDraftPreviewPullRequest(ctx context.Context, runtime config.SiteRunti
 	if titlePath == "" {
 		titlePath = state.DraftID
 	}
+	title := "HomeCMS Publish: " + titlePath
+	body := fmt.Sprintf("HomeCMSから現在の編集内容をPublishした変更です。\n\n- Commit: `%s`", state.CommitSHA)
+	if state.URL != "" {
+		title = "HomeCMS preview: " + titlePath
+		body = fmt.Sprintf("HomeCMSのデプロイプレビューで確認した変更です。\n\n- Commit: `%s`\n- Preview: %s\n\nRefs #30", state.CommitSHA, state.URL)
+	}
 	payload := map[string]interface{}{
-		"title":                 "HomeCMS preview: " + titlePath,
+		"title":                 title,
 		"head":                  state.Branch,
 		"base":                  runtime.GitBranch,
 		"maintainer_can_modify": true,
 		"draft":                 true,
-		"body":                  fmt.Sprintf("HomeCMSのデプロイプレビューで確認した変更です。\n\n- Commit: `%s`\n- Preview: %s\n\nRefs #30", state.CommitSHA, state.URL),
+		"body":                  body,
 	}
 	var created githubPullRequest
 	if err := githubJSONRequest(ctx, client.httpClient, token, http.MethodPost, requestURL, payload, &created); err != nil {

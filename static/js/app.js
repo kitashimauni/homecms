@@ -1,6 +1,11 @@
 import * as API from './api.js';
 import * as UI from './ui.js';
 import * as Editor from './editor.js';
+import {
+    getPublishMode,
+    publishConfirmationMessage,
+    publishStatusLabel,
+} from './publish.js';
 import { createSiteRequestTracker } from './site_request.js';
 import {
     createLocalPreviewFrameController,
@@ -68,6 +73,26 @@ function setSiteSelectorDisabled(disabled) {
     if (selector) selector.disabled = disabled;
 }
 
+function updatePublishButtonAvailability() {
+    const button = document.getElementById('publish-btn');
+    if (!button) return;
+    const hasArticle = Boolean(Editor.getCurrentPath());
+    button.classList.toggle('hidden', !hasArticle);
+    if (!hasArticle) return;
+
+    const mode = getPublishMode({
+        deploymentEnabled,
+        deploymentStatus: deploymentState?.status,
+    });
+    const label = mode === 'preview'
+        ? '確認済みのDeployment PreviewからPublish'
+        : deploymentEnabled
+            ? `Deployment Previewは${publishStatusLabel(deploymentState?.status)}です。現在の編集内容からPublish`
+            : '現在の編集内容からPublish';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+}
+
 init();
 
 async function init() {
@@ -105,6 +130,7 @@ async function init() {
     window.createNewFile = () => Editor.createNewFile(refreshFileList);
     window.deleteFile = async () => {
         await Editor.deleteFile(refreshFileList);
+        updatePublishButtonAvailability();
     };
     window.insertImage = () => {
         const currentPath = Editor.getCurrentPath();
@@ -221,6 +247,7 @@ async function loadSiteData(siteID = API.getCurrentSite(), request = null) {
     deploymentEnabled = UI.configureDeploymentPreview(cmsConfig);
     deploymentState = null;
     UI.renderDeploymentState(null);
+    updatePublishButtonAvailability();
     await refreshFileList(siteID, request, generation);
     return isCurrent();
 }
@@ -250,6 +277,7 @@ async function switchSite(siteID) {
     API.setCurrentSite(siteID);
     switchedSite = true;
     Editor.clearEditor();
+    updatePublishButtonAvailability();
     try {
         const loaded = await loadSiteData(siteID, request);
         if (!isCurrentSiteRequest(request) || !loaded) return;
@@ -284,12 +312,16 @@ async function loadFile(path) {
     stopDeploymentPolling();
     deploymentState = null;
     UI.renderDeploymentState(null);
+    updatePublishButtonAvailability();
     await Editor.loadFile(path);
     if (!isCurrentSiteContext(siteID, generation)) return;
     if (Editor.getCurrentPath() !== path) {
+        updatePublishButtonAvailability();
         await refreshLocalPreviewStatus(siteID, null, generation);
         return;
     }
+
+    updatePublishButtonAvailability();
 
     resetLocalPreviewArticleURL();
     if (localPreviewEnabled && previewEngine === 'local') {
@@ -1030,14 +1062,21 @@ async function runPublish(path, draftID) {
         UI.showToast("Publish is already running", "warning");
         return;
     }
-    if (!path || !draftID || deploymentState?.status !== 'ready') {
-        UI.showToast("Readyになったデプロイプレビューを確認してから公開してください", "warning");
+    if (!path || !draftID) {
+        UI.showToast("No file selected", "warning");
         return;
     }
-    if (!confirm("確認済みのデプロイ内容からPRを作成しますか？")) return;
+    const mode = getPublishMode({
+        deploymentEnabled,
+        deploymentStatus: deploymentState?.status,
+    });
+    if (!confirm(publishConfirmationMessage({
+        deploymentEnabled,
+        deploymentStatus: deploymentState?.status,
+    }))) return;
     publishInProgress = true;
 
-    const btn = document.getElementById('publish-preview-btn');
+    const btn = document.getElementById('publish-btn');
     let originalText = "";
     if (btn) {
         originalText = btn.innerHTML;
@@ -1048,7 +1087,7 @@ async function runPublish(path, draftID) {
     try {
         await Editor.flushPendingSave();
         if (!isCurrent()) return;
-        const data = await Editor.runGitMutation(() => API.runPublish(path, draftID, siteID));
+        const data = await Editor.runGitMutation(() => API.runPublish(path, draftID, siteID, mode));
         if (!isCurrent()) return;
         if (data.status === 'ok') {
             UI.showToast("PRを作成しました", "success");
@@ -1067,6 +1106,7 @@ async function runPublish(path, draftID) {
             btn.innerHTML = originalText;
             btn.disabled = false;
         }
+        updatePublishButtonAvailability();
     }
 }
 
@@ -1093,6 +1133,7 @@ function stopDeploymentPolling() {
 function applyDeploymentState(state, siteID = API.getCurrentSite(), generation = siteRequestTracker.generation) {
     deploymentState = UI.normalizeDeploymentState(state);
     UI.renderDeploymentState(deploymentState);
+    updatePublishButtonAvailability();
     if (deploymentState?.status === 'queued' || deploymentState?.status === 'building') {
         deploymentPollTimer = setTimeout(() => refreshDeploymentState(siteID, generation), 3000);
     }

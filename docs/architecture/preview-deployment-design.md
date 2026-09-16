@@ -63,7 +63,7 @@ stateにはsite ID、draft ID、正規化済みarticle path、commit対象paths�
 
 ## Publishとcleanup
 
-production branchへ直接commit/pushする従来Publishは使用しない。readyになったdraft branchからproduction branchへのPull Requestを作成し、レビュー後のmergeを公開操作とする。publishでは同一draft lockの下でprovider status、stateに保存したpathsとworking treeの一致、remote branch SHA、既存または作成したPRの`head.sha`を順に確認し、すべてがpreview済みcommitと一致する場合だけPR URLを返す。draft破棄時はremote branchとprovider deploymentをcleanupする。cleanup失敗はstateに残し、同じ明示操作で再試行できる。
+Publishはproduction branchへ直接commit/pushせず、`cms-preview/<draftID>`からproduction branchへのPull Requestを作成し、レビュー後のmergeを公開操作とする。Deployment Previewがreadyの場合は同一draft lockの下でprovider status、stateに保存したpathsとworking treeの一致、remote branch SHA、既存または作成したPRの`head.sha`を順に確認し、すべてがpreview済みcommitと一致する場合だけPR URLを返す。Deployment Previewが無効・更新中・失敗・古い状態の場合も、現在のproduction working treeから対象記事と参照mediaをdraft branchへcommitし、プレビューURLを要求せずPRを作成できる。どちらの経路もGit mutation/sync gateとremote branchの二重確認を維持する。draft破棄時はremote branchとprovider deploymentをcleanupする。cleanup失敗はstateに残し、同じ明示操作で再試行できる。
 
 ## セキュリティ
 

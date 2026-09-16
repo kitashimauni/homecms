@@ -18,6 +18,7 @@ import (
 type deploymentPreviewRequest struct {
 	Path    string `json:"path"`
 	DraftID string `json:"draft_id"`
+	Mode    string `json:"mode"`
 }
 
 func UpdateDeploymentPreview(c *gin.Context) {
@@ -125,11 +126,34 @@ func PublishDeploymentPreview(c *gin.Context) {
 		ErrorBadRequest(c, "Invalid article path")
 		return
 	}
-	store, provider, ok := deploymentDependencies(c, runtime)
-	if !ok {
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		if strings.TrimSpace(runtime.PreviewDeployment.Provider) == "" {
+			mode = "direct"
+		} else {
+			mode = "preview"
+		}
+	}
+	var prURL string
+	var err error
+	switch mode {
+	case "direct":
+		paths, pathsErr := deploymentDraftPaths(runtime, req.Path)
+		if pathsErr != nil {
+			ErrorBadRequest(c, pathsErr.Error())
+			return
+		}
+		prURL, err = services.PublishArticle(c.Request.Context(), runtime, token, req.DraftID, req.Path, paths)
+	case "preview":
+		store, provider, ok := deploymentDependencies(c, runtime)
+		if !ok {
+			return
+		}
+		prURL, err = services.PublishDraftPreview(c.Request.Context(), runtime, token, req.DraftID, req.Path, store, provider)
+	default:
+		ErrorBadRequest(c, "Invalid publish mode")
 		return
 	}
-	prURL, err := services.PublishDraftPreview(c.Request.Context(), runtime, token, req.DraftID, req.Path, store, provider)
 	if errors.Is(err, os.ErrNotExist) {
 		ErrorNotFound(c, "Deployment preview does not exist")
 		return
