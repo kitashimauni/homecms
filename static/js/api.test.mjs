@@ -29,6 +29,19 @@ describe("site-scoped preview API contracts", () => {
         assert.equal(JSON.parse(calls[1].options.body).base_revision, "sha256:old");
     });
 
+    it("surfaces HTTP errors from Git Sync", async () => {
+        globalThis.fetch = async () => ({
+            ok: false,
+            status: 409,
+            json: async () => ({ code: "CONFLICT", message: "Git Sync conflict" }),
+        });
+
+        await assert.rejects(
+            API.runSync(),
+            error => error.status === 409 && error.code === "CONFLICT" && error.message === "Git Sync conflict",
+        );
+    });
+
     it("pins read requests to their explicit site", async () => {
         const calls = [];
         globalThis.fetch = async (url, options = {}) => {

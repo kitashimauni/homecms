@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"hugo-cms/pkg/config"
 	"hugo-cms/pkg/models"
 	"hugo-cms/pkg/services"
@@ -32,6 +33,10 @@ func HandleSync(c *gin.Context) {
 	log, err := services.SyncRepoForRuntime(runtime, token)
 
 	if err != nil {
+		if errors.Is(err, services.ErrGitSyncConflict) {
+			ErrorConflict(c, "Git Sync conflict: local changes conflict with remote updates. Resolve the conflict with Diff or Reset before syncing again.")
+			return
+		}
 		ErrorInternal(c, "Sync failed: "+log)
 		return
 	}

@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hugo-cms/pkg/config"
 	"log/slog"
@@ -14,6 +15,10 @@ import (
 	"strings"
 	"time"
 )
+
+var ErrGitSyncConflict = errors.New("git sync conflict")
+
+type syncGitFunc func(config.SiteRuntime, string, ...string) (string, error)
 
 func CheckSemanticDiffForRuntime(runtime config.SiteRuntime, relPath string) (bool, error) {
 	gitPath := filepath.ToSlash(relPath)
@@ -210,14 +215,81 @@ func createAskPassScript() (string, error) {
 }
 
 func SyncRepoForRuntime(runtime config.SiteRuntime, token string) (string, error) {
+	return syncRepoForRuntime(runtime, token, ExecuteGitWithTokenForRuntime)
+}
+
+func syncRepoForRuntime(runtime config.SiteRuntime, token string, git syncGitFunc) (string, error) {
 	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 
-	log, err := ExecuteGitWithTokenForRuntime(runtime, token, "pull", runtime.GitRemote, runtime.GitBranch)
-	if err == nil {
-		InvalidateCacheForRuntime(runtime)
+	var logs []string
+	appendLog := func(output string) {
+		if trimmed := strings.TrimSpace(output); trimmed != "" {
+			logs = append(logs, trimmed)
+		}
 	}
-	return log, err
+	run := func(args ...string) (string, error) {
+		output, err := git(runtime, token, args...)
+		appendLog(output)
+		return output, err
+	}
+	logOutput := func() string { return strings.Join(logs, "\n") }
+
+	originalHead, err := run("rev-parse", "HEAD^{commit}")
+	if err != nil {
+		return logOutput(), fmt.Errorf("resolve local branch: %w", err)
+	}
+	originalHead = strings.TrimSpace(originalHead)
+	if err := validateCommitSHA(originalHead); err != nil {
+		return logOutput(), fmt.Errorf("local branch returned invalid commit: %w", err)
+	}
+	if _, err := run("fetch", "--no-tags", runtime.GitRemote, runtime.GitBranch); err != nil {
+		return logOutput(), fmt.Errorf("fetch remote branch: %w", err)
+	}
+	remoteHead, err := run("rev-parse", "FETCH_HEAD^{commit}")
+	if err != nil {
+		return logOutput(), fmt.Errorf("resolve fetched branch: %w", err)
+	}
+	if err := validateCommitSHA(strings.TrimSpace(remoteHead)); err != nil {
+		return logOutput(), fmt.Errorf("fetched branch returned invalid commit: %w", err)
+	}
+	dirtyOutput, err := git(runtime, token, "status", "--porcelain=v1", "-z")
+	if err != nil {
+		return logOutput(), fmt.Errorf("inspect local changes: %w", err)
+	}
+	hasLocalChanges := len(dirtyOutput) > 0
+	if !hasLocalChanges {
+		if _, err := run("merge", "--ff-only", "FETCH_HEAD"); err != nil {
+			return logOutput(), fmt.Errorf("%w: local branch cannot be fast-forwarded to the remote branch", ErrGitSyncConflict)
+		}
+		InvalidateCacheForRuntime(runtime)
+		return logOutput(), nil
+	}
+
+	if _, err := run("stash", "push", "--include-untracked", "--message", "HomeCMS Git Sync local changes"); err != nil {
+		return logOutput(), fmt.Errorf("stash local changes before sync: %w", err)
+	}
+	restoreStash := func() error {
+		_, restoreErr := run("stash", "pop")
+		return restoreErr
+	}
+	if _, err := run("merge", "--ff-only", "FETCH_HEAD"); err != nil {
+		if restoreErr := restoreStash(); restoreErr != nil {
+			return logOutput(), fmt.Errorf("sync failed and restoring local changes failed: %w", restoreErr)
+		}
+		return logOutput(), fmt.Errorf("%w: local branch cannot be fast-forwarded to the remote branch", ErrGitSyncConflict)
+	}
+	if _, err := run("stash", "pop"); err != nil {
+		if _, resetErr := run("reset", "--hard", originalHead); resetErr != nil {
+			return logOutput(), fmt.Errorf("%w: conflict occurred and restoring the local branch failed: %v", ErrGitSyncConflict, resetErr)
+		}
+		if _, restoreErr := run("stash", "pop"); restoreErr != nil {
+			return logOutput(), fmt.Errorf("%w: conflict occurred and restoring local changes failed: %v", ErrGitSyncConflict, restoreErr)
+		}
+		return logOutput(), fmt.Errorf("%w: local changes conflict with remote updates", ErrGitSyncConflict)
+	}
+	InvalidateCacheForRuntime(runtime)
+	return logOutput(), nil
 }
 
 func DiffForRuntime(runtime config.SiteRuntime, f1Path, f2Path, relPath string) (string, string) {

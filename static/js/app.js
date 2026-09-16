@@ -1021,7 +1021,12 @@ async function runSync() {
             UI.showToast("Sync Error: " + data.log, "error");
         }
     } catch (e) {
-        UI.showToast("Network Error", "error");
+        if (e?.status) {
+            syncResponseReceived = true;
+            UI.showToast(`Sync failed: ${e.message}`, e.status === 409 ? "warning" : "error");
+        } else {
+            UI.showToast("Network Error", "error");
+        }
         if (previewPrepared && !syncResponseReceived) {
             // The server may have completed the pull/reset even if the
             // response was lost. Do not send the old editor payload back into
