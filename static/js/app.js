@@ -96,6 +96,7 @@ function updatePublishButtonAvailability() {
 init();
 
 async function init() {
+    Editor.setArticlePathChangeListener(updatePublishButtonAvailability);
     initializeLocalPreviewFrame();
     let initialRequest = null;
     try {

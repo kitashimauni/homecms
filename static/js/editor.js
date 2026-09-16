@@ -18,6 +18,7 @@ let articleLoadGeneration = 0;
 let articleLoadController = null;
 let gitSyncInProgress = false;
 let articleRevisionConflictPath = "";
+let articlePathChangeListener = null;
 const localPreviewInflight = new Set();
 
 const PREVIEW_DEBOUNCE_MS = 180;
@@ -126,6 +127,14 @@ export function setConfig(cfg) {
     cmsConfig = cfg;
 }
 
+export function setArticlePathChangeListener(listener) {
+    articlePathChangeListener = typeof listener === 'function' ? listener : null;
+}
+
+function notifyArticlePathChanged() {
+    articlePathChangeListener?.(currentPath);
+}
+
 function localPreviewEnabled() {
     return cmsConfig?._cms?.local_preview?.enabled === true;
 }
@@ -161,6 +170,7 @@ export function clearEditor() {
     cancelLocalPreviewTimer();
     resetLocalPreviewClientState();
     currentPath = "";
+    notifyArticlePathChanged();
     currentData = null;
     lastSavedPayload = "";
     lastQueuedPayload = "";
@@ -535,6 +545,7 @@ export async function loadFile(path, { allowDuringGitSync = false } = {}) {
         if (!isCurrentArticleLoad(request)) return;
 
         currentPath = path;
+        notifyArticlePathChanged();
         currentData = data;
         articleRevisionConflictPath = "";
         resetLocalPreviewClientState();
