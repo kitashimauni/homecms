@@ -182,6 +182,8 @@ Local Live Preview panelでは次を利用できます。
 - stopped / starting / ready / failedの状態表示
 - `always_on`の常駐設定、supervisorのretry状態、次回refresh時刻、実効timezoneの表示
 
+Preview headerでは`Live Preview`と現在の状態を常時表示し、Preview方式の切替と`詳細`操作をコンパクトに配置します。再起動予定時刻、埋め込み表示の切替、新規タブ、Markdown fallback、停止などのruntime操作と診断メッセージは`詳細`パネルへまとめ、通常は閉じておきます。runtimeがfailedへ遷移した場合は詳細パネルを自動で開き、状態表示とエラー内容を同時に確認できます。パネルの開閉状態はEdit / Preview / Splitの切替ではリセットしません。
+
 Local Live Previewが有効なsiteではheaderのview切替を次のように扱います。
 
 - `Edit`: Editorのみを全幅表示

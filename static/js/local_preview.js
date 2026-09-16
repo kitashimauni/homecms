@@ -13,6 +13,10 @@ export function shouldAutoShowEmbeddedLocalPreview({ status, hasCurrentPath, dis
     return hasCurrentPath && !dismissed && (status === 'starting' || status === 'ready');
 }
 
+export function shouldAutoExpandLocalPreviewDetails({ status, previousStatus } = {}) {
+    return status === 'failed' && previousStatus !== 'failed';
+}
+
 export function shouldRetryLocalPreviewNavigation({ error, attempt } = {}) {
     if (!Number.isInteger(attempt) || attempt >= LOCAL_PREVIEW_INITIAL_NAVIGATION_MAX_ATTEMPTS) return false;
     const status = error?.status;

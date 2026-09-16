@@ -101,23 +101,30 @@
                             <span id="local-preview-status" class="deployment-status idle">停止</span>
                         </div>
                         <span class="local-preview-caption">編集中のサイト表示</span>
-                        <div class="preview-engine-switcher" role="group" aria-label="Preview方式">
-                            <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="local" aria-pressed="true" onclick="switchPreviewEngine('local')">Local</button>
-                            <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="markdown" aria-pressed="false" onclick="switchPreviewEngine('markdown')">Markdown</button>
+                        <div class="local-preview-toolbar-actions">
+                            <div class="preview-engine-switcher" role="group" aria-label="Preview方式">
+                                <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="local" aria-pressed="true" onclick="switchPreviewEngine('local')">Local</button>
+                                <button type="button" class="preview-engine-button action-btn secondary" data-preview-engine="markdown" aria-pressed="false" onclick="switchPreviewEngine('markdown')">Markdown</button>
+                            </div>
+                            <details id="local-preview-details" class="local-preview-details">
+                                <summary>詳細</summary>
+                                <div class="local-preview-details-content">
+                                    <div id="local-preview-message" class="deployment-message" aria-live="polite">
+                                        記事を選択すると未保存内容をpreviewへ反映します。
+                                    </div>
+                                    <div id="local-preview-policy" class="local-preview-policy" aria-live="polite"></div>
+                                    <div id="local-preview-loading" class="local-preview-loading hidden" role="status" aria-live="polite">
+                                        Preview serverを起動しています…
+                                    </div>
+                                    <div class="local-preview-actions">
+                                        <button id="local-preview-open-btn" class="action-btn secondary" onclick="openLocalLivePreview()">新規タブで開く</button>
+                                        <button id="local-preview-embed-btn" class="action-btn" onclick="toggleEmbeddedLocalPreview()">埋め込みを表示</button>
+                                        <button id="local-preview-markdown-btn" class="action-btn secondary" onclick="showMarkdownFallback()">簡易Markdownを表示</button>
+                                        <button id="local-preview-stop-btn" class="action-btn danger hidden" onclick="stopLocalLivePreview()">停止</button>
+                                    </div>
+                                </div>
+                            </details>
                         </div>
-                    </div>
-                    <div id="local-preview-message" class="deployment-message" aria-live="polite">
-                        記事を選択すると未保存内容をpreviewへ反映します。
-                    </div>
-                    <div id="local-preview-policy" class="local-preview-policy" aria-live="polite"></div>
-                    <div id="local-preview-loading" class="local-preview-loading hidden" role="status" aria-live="polite">
-                        Preview serverを起動しています…
-                    </div>
-                    <div class="local-preview-actions">
-                        <button id="local-preview-open-btn" class="action-btn secondary" onclick="openLocalLivePreview()">新規タブで開く</button>
-                        <button id="local-preview-embed-btn" class="action-btn" onclick="toggleEmbeddedLocalPreview()">埋め込みを表示</button>
-                        <button id="local-preview-markdown-btn" class="action-btn secondary" onclick="showMarkdownFallback()">簡易Markdownを表示</button>
-                        <button id="local-preview-stop-btn" class="action-btn danger hidden" onclick="stopLocalLivePreview()">停止</button>
                     </div>
                     <div id="local-preview-embed" class="local-preview-embed hidden">
                         <div id="local-preview-frame-loading" class="local-preview-frame-overlay" role="status" aria-live="polite">
