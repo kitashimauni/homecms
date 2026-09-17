@@ -850,7 +850,8 @@ export function canUseArticleMedia(currentPath, collection = null, config = null
     const normalizedPath = normalizePath(currentPath);
     if (!normalizedPath) return false;
     const isBundle = normalizedPath.endsWith('/index.md') || normalizedPath.endsWith('/_index.md');
-    const collectionMediaFolder = typeof collection?.media_folder === 'string' ? collection.media_folder.trim() : '';
+    const isLegacyConfig = config?._cms?.config_source === 'config.yml';
+    const collectionMediaFolder = !isLegacyConfig && typeof collection?.media_folder === 'string' ? collection.media_folder.trim() : '';
     const legacyMediaFolder = typeof config?._cms?.article_media_dir === 'string' ? config._cms.article_media_dir.trim() : '';
     return isBundle || Boolean(collectionMediaFolder || legacyMediaFolder);
 }

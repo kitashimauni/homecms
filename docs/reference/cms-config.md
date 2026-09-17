@@ -36,6 +36,8 @@ media:
 
 記事ごとのmediaは `content.collections[].media_folder` で有効化できます。`{{dirname}}` は選択中のMarkdown記事のディレクトリに展開されるため、`{{dirname}}` は記事と同じディレクトリ、`{{dirname}}/images` は記事ディレクトリ配下の `images` を対象にします。Article Mediaの一覧・アップロード・削除は同じ解決結果を使用し、Markdownへ返すpathは記事ディレクトリからの相対pathです。page bundleではcollection設定がない場合も従来どおり記事ディレクトリを対象にします。collectionの設定がない通常記事では、`ARTICLE_MEDIA_DIR` またはSite Registryの `article_media_dir` を後方互換として使用します。
 
+旧 `static/admin/config.yml` のcollectionにある Netlify/Sveltia形式の `media_folder` は後方互換のため読み込みますが、Article Mediaの保存先としては使用しません。legacy設定では `ARTICLE_MEDIA_DIR` またはSite Registryの `article_media_dir` を使い、未指定のpage bundleはバンドル直下を対象にします。
+
 `GET /admin/api/config` のレスポンスでは `_cms.config_source` に `.homecms.yml` または `config.yml` が入り、設定上の注意点がある場合は `_cms.warnings` に入ります。
 
 ## 設定validation

@@ -133,8 +133,12 @@ func validateCMSConfig(runtime config.SiteRuntime, cfg models.CMSConfig, source 
 			warnings = append(warnings, configWarning("warning", "unsupported_frontmatter", pathPrefix+".frontmatter", fmt.Sprintf("Front matter format %q is not supported; use yaml, toml, or json.", format)))
 		}
 
-		if mediaFolder := strings.TrimSpace(collection.MediaFolder); mediaFolder != "" && !isSafeArticleMediaFolder(mediaFolder) {
-			warnings = append(warnings, configWarning("error", "invalid_media_folder", pathPrefix+".media_folder", "Collection media_folder must stay within the article directory and collection."))
+		// Legacy collection media_folder is a Netlify/Sveltia path template and
+		// is intentionally ignored by the Article Media resolver.
+		if source != legacyCMSConfigFile {
+			if mediaFolder := strings.TrimSpace(collection.MediaFolder); mediaFolder != "" && !isSafeArticleMediaFolder(mediaFolder) {
+				warnings = append(warnings, configWarning("error", "invalid_media_folder", pathPrefix+".media_folder", "Collection media_folder must stay within the article directory and collection."))
+			}
 		}
 
 		warnings = append(warnings, validatePathTemplate(source, pathPrefix+".path", collection.Path, fieldNames)...)

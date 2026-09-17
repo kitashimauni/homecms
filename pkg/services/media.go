@@ -101,6 +101,7 @@ func articleMediaTargetForRuntime(runtime config.SiteRuntime, articlePath string
 	}
 
 	collectionPath := filepath.ToSlash(filepath.Join(runtime.ContentDir, articlePath))
+	_, configSource, configErr := LoadCMSConfigForRuntime(runtime)
 	collection, collectionErr := GetCollectionForPathForRuntime(runtime, collectionPath)
 	collectionRoot := SafeJoin(runtime.RepoPath, "", filepath.ToSlash(filepath.Clean(runtime.ContentDir)))
 	if collectionErr == nil {
@@ -123,7 +124,11 @@ func articleMediaTargetForRuntime(runtime config.SiteRuntime, articlePath string
 	}
 
 	mediaFolder := ""
-	if collection != nil {
+	// Legacy Netlify/Sveltia collection media_folder values are not article
+	// media configuration. They are commonly absolute/template paths such as
+	// "/{{year}}{{month}}{{day}}-{{url_title}}/src" and were ignored by the
+	// previous runtime. Keep legacy page bundles on the ArticleMediaDir path.
+	if collection != nil && !(configErr == nil && configSource == legacyCMSConfigFile) {
 		mediaFolder = strings.TrimSpace(collection.MediaFolder)
 	}
 	if mediaFolder == "" {

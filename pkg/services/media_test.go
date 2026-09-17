@@ -336,6 +336,57 @@ func TestArticleMediaRejectsCollectionEscape(t *testing.T) {
 	}
 }
 
+func TestLegacyPageBundleArticleMediaIgnoresCollectionMediaFolder(t *testing.T) {
+	repoPath := t.TempDir()
+	writeTestFile(t, filepath.Join(repoPath, "static", "admin", "config.yml"), `
+collections:
+  - name: posts
+    folder: content/posts
+    path: "{{year}}{{month}}{{day}}-{{url_title}}/index"
+    media_folder: "/{{year}}{{month}}{{day}}-{{url_title}}/src"
+`)
+	runtime := config.NewSiteRuntime(config.SiteConfig{
+		ID:              "test",
+		RepoPath:        repoPath,
+		Generator:       "hugo",
+		ContentDir:      "content",
+		StaticDir:       "static",
+		PublicDir:       "public",
+		PreviewURL:      "/",
+		ArticleMediaDir: "",
+	})
+	originalMaxSize := config.MaxUploadSize
+	config.MaxUploadSize = 1024 * 1024
+	t.Cleanup(func() { config.MaxUploadSize = originalMaxSize })
+
+	articlePath := "posts/20260608-takao/index.md"
+	articleDir := filepath.Join(repoPath, "content", "posts", "20260608-takao")
+	writeTestFile(t, filepath.Join(articleDir, "index.md"), "---\ntitle: Takao\n---\n")
+	writeTestFile(t, filepath.Join(articleDir, "existing.jpg"), "existing image")
+
+	files, err := ListMediaFilesForRuntime(runtime, "content", articlePath)
+	if err != nil {
+		t.Fatalf("ListMediaFilesForRuntime() error = %v", err)
+	}
+	if len(files) != 1 || files[0].Path != "existing.jpg" || files[0].RepoPath != "content/posts/20260608-takao/existing.jpg" {
+		t.Fatalf("ListMediaFilesForRuntime() = %#v, want bundle-root existing.jpg", files)
+	}
+
+	header := testFileHeader(t, "image.png", []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	})
+	media, err := SaveMediaFileForRuntime(runtime, header, "content", articlePath)
+	if err != nil {
+		t.Fatalf("SaveMediaFileForRuntime() error = %v", err)
+	}
+	if !strings.HasPrefix(media.RepoPath, "content/posts/20260608-takao/image_") || !strings.HasPrefix(media.Path, "image_") {
+		t.Fatalf("saved media = %#v, want bundle-root path", media)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, filepath.FromSlash(media.RepoPath))); err != nil {
+		t.Fatalf("saved legacy bundle media not found: %v", err)
+	}
+}
+
 func TestSaveMediaFileUsesHomeCMSMediaFolder(t *testing.T) {
 	repoPath := t.TempDir()
 	writeTestFile(t, filepath.Join(repoPath, ".homecms.yml"), `

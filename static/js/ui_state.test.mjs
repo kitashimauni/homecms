@@ -30,6 +30,12 @@ describe("article media availability", () => {
             media_folder: "",
         }, { _cms: {} }), false);
     });
+
+    it("does not treat legacy collection media_folder as Article Media configuration", () => {
+        assert.equal(canUseArticleMedia("posts/20260608/takao.md", {
+            media_folder: "/{{year}}{{month}}{{day}}-{{url_title}}/src",
+        }, { _cms: { config_source: "config.yml" } }), false);
+    });
 });
 
 describe("UI state normalization", () => {

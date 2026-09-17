@@ -36,6 +36,7 @@ collections:
   - name: posts
     folder: content/posts
     path: "{{title}}"
+    media_folder: "/{{year}}{{month}}{{day}}-{{url_title}}/src"
     fields:
       - name: title
         widget: string
@@ -44,6 +45,7 @@ collections:
 	warnings := ValidateConfigForRuntime(testRuntime(repoPath), "config.yml")
 	assertWarningCode(t, warnings, "legacy_config")
 	assertNoWarningCode(t, warnings, "unknown_path_variable")
+	assertNoWarningCode(t, warnings, "invalid_media_folder")
 }
 
 func TestValidateConfigForRuntimeReportsLegacyConfigPathWithStaticDir(t *testing.T) {

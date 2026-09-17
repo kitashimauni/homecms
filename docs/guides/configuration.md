@@ -244,6 +244,8 @@ media:
 
 通常のMarkdown記事でArticle Mediaを使う場合は、collectionに `media_folder: "{{dirname}}"` または `media_folder: "{{dirname}}/images"` を指定します。`{{dirname}}`は記事Markdownのディレクトリに展開され、一覧・upload・deleteの対象とMarkdown挿入pathで共通して使われます。既存サイトでは `ARTICLE_MEDIA_DIR` またはSite Registryの `article_media_dir` も利用できます。
 
+旧 `static/admin/config.yml` のcollectionにある Netlify/Sveltia形式の `media_folder` は保存先として解釈せず、legacy設定では `ARTICLE_MEDIA_DIR` またはSite Registryの `article_media_dir` を使用します。未指定のpage bundleはバンドル直下を対象にします。
+
 `content.collections[].path`で`{{slug}}`のような変数を使う場合は、作成フォームから値を送信できるように同名のfieldを定義してください。
 
 CMSは設定読み込み時に、collection名・folder・path変数・`preview.url_field`・media folderなどを検査します。注意点がある場合は`GET /admin/api/config`の`_cms.warnings`に入り、管理画面のサイドバーにも表示されます。
