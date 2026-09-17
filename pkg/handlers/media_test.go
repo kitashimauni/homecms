@@ -95,6 +95,75 @@ func TestDeleteMedia_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestDeleteMedia_ArticleMediaUsesArticleContextAndSyncsPreview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreSiteScopeConfig(t)
+	repoPath := t.TempDir()
+	writeHandlerTestFile(t, filepath.Join(repoPath, ".homecms.yml"), `
+version: 1
+content:
+  collections:
+    - name: posts
+      folder: content/posts
+      media_folder: "{{dirname}}/images"
+`)
+	articlePath := "posts/20260608/takao.md"
+	repoMediaPath := "content/posts/20260608/images/photo.jpg"
+	writeHandlerTestFile(t, filepath.Join(repoPath, "content", articlePath), "---\ntitle: Takao\n---\n")
+	writeHandlerTestFile(t, filepath.Join(repoPath, filepath.FromSlash(repoMediaPath)), "image")
+	config.DefaultSiteID = "default"
+	config.Sites = []config.SiteConfig{{
+		ID:         "default",
+		RepoPath:   repoPath,
+		Generator:  "eleventy",
+		ContentDir: "content",
+		StaticDir:  "static",
+		PublicDir:  "_site",
+	}}
+
+	originalInvalidate := invalidateLocalPreviewArticleURL
+	originalSync := syncLocalPreviewContentResourceForMutation
+	var invalidated, synced bool
+	var syncedPath string
+	invalidateLocalPreviewArticleURL = func(config.SiteRuntime, ...string) error {
+		invalidated = true
+		return nil
+	}
+	syncLocalPreviewContentResourceForMutation = func(_ config.SiteRuntime, path string, deleted, invalidateMetadata bool) error {
+		synced = deleted && invalidateMetadata
+		syncedPath = path
+		return nil
+	}
+	t.Cleanup(func() {
+		invalidateLocalPreviewArticleURL = originalInvalidate
+		syncLocalPreviewContentResourceForMutation = originalSync
+	})
+
+	body, err := json.Marshal(map[string]string{
+		"repo_path":    repoMediaPath,
+		"article_path": articlePath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/media/delete?site=default", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	DeleteMedia(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("DeleteMedia() status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, filepath.FromSlash(repoMediaPath))); !os.IsNotExist(err) {
+		t.Fatalf("Article Media file still exists, stat error = %v", err)
+	}
+	if !invalidated || !synced || syncedPath != repoMediaPath {
+		t.Fatalf("preview hooks = invalidated:%v synced:%v path:%q", invalidated, synced, syncedPath)
+	}
+}
+
 func TestListMedia_Modes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -240,5 +309,15 @@ func TestUploadMedia_NoFile(t *testing.T) {
 		if resp.Code != ErrCodeBadRequest {
 			t.Errorf("UploadMedia() code = %q, want %q", resp.Code, ErrCodeBadRequest)
 		}
+	}
+}
+
+func writeHandlerTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -122,9 +122,11 @@ func DeleteMedia(c *gin.Context) {
 		slog.Warn("Failed to prepare Local Live Preview metadata before media deletion", "site", runtime.ID, "path", req.RepoPath, "error", err)
 	}
 
-	deleteErr := services.DeleteMediaFileForRuntime(runtime, req.RepoPath)
+	var deleteErr error
 	if req.ArticlePath != "" {
 		deleteErr = services.DeleteArticleMediaFileForRuntime(runtime, req.RepoPath, req.ArticlePath)
+	} else {
+		deleteErr = services.DeleteMediaFileForRuntime(runtime, req.RepoPath)
 	}
 	if err := deleteErr; err != nil {
 		ErrorInternal(c, "Failed to delete: "+err.Error())
