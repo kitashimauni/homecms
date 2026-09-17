@@ -83,3 +83,21 @@ describe("site-scoped preview API contracts", () => {
         requestCalls.forEach(call => assert.equal(call.options.headers["X-CMS-Site"], "site-b"));
     });
 });
+
+describe("media API contracts", () => {
+    it("pins article context to Article media deletion", async () => {
+        const calls = [];
+        globalThis.fetch = async (url, options = {}) => {
+            calls.push({ url, options });
+            if (url === "/admin/api/csrf-token") return { ok: true, status: 200, json: async () => ({ csrf_token: "csrf" }) };
+            return { ok: true, status: 200, json: async () => ({ status: "deleted" }) };
+        };
+
+        await API.deleteMedia("content/posts/20260608/images/photo.jpg", "posts/20260608/takao.md");
+        const request = calls.find(call => call.url === "/admin/api/media/delete?site=site-a");
+        assert.deepEqual(JSON.parse(request.options.body), {
+            repo_path: "content/posts/20260608/images/photo.jpg",
+            article_path: "posts/20260608/takao.md",
+        });
+    });
+});

@@ -508,12 +508,14 @@ readyになったdraft branchからproduction branchへのPull Requestを作成�
 **リクエストボディ**:
 ```json
 {
-    "repo_path": "static/images/image.jpg"
+    "repo_path": "content/posts/20260608/images/image.jpg",
+    "article_path": "posts/20260608/takao.md"
 }
 ```
 
 **制限**:
 - `static/` または `content/` 内のファイルのみ削除可能
+- Article Mediaでは `article_path` を指定し、collectionの `media_folder` で解決された対象ディレクトリ内のファイルだけ削除可能
 
 **レスポンス**:
 ```json
@@ -550,6 +552,7 @@ CMS設定を取得します。サイトリポジトリ直下の `.homecms.yml` �
             "name": "posts",
             "label": "ブログ記事",
             "folder": "content/posts",
+            "media_folder": "{{dirname}}/images",
             "create": true,
             "fields": [...]
         }
@@ -561,6 +564,7 @@ CMS設定を取得します。サイトリポジトリ直下の `.homecms.yml` �
         "content_dir": "content",
         "static_dir": "static",
         "public_dir": "public",
+        "article_media_dir": "images",
         "site_generator": "hugo",
         "config_source": ".homecms.yml",
         "markdown_preview": {"enabled": true},

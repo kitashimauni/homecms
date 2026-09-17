@@ -355,7 +355,7 @@ export async function uploadMedia(file, mode, path) {
     return await res.json();
 }
 
-export async function deleteMedia(repoPath) {
+export async function deleteMedia(repoPath, articlePath = "") {
     await ensureCSRFToken();
     const res = await fetch(withSite('/admin/api/media/delete'), {
         method: 'POST',
@@ -364,7 +364,7 @@ export async function deleteMedia(repoPath) {
             ...siteHeaders(),
             ...getCSRFHeaders()
         },
-        body: JSON.stringify({ repo_path: repoPath })
+        body: JSON.stringify({ repo_path: repoPath, ...(articlePath ? { article_path: articlePath } : {}) })
     });
     if (!res.ok) throw new Error("Delete failed");
     return await res.json();

@@ -36,6 +36,7 @@ collections:
   - name: posts
     folder: content/posts
     path: "{{title}}"
+    media_folder: "/{{year}}{{month}}{{day}}-{{url_title}}/src"
     fields:
       - name: title
         widget: string
@@ -44,6 +45,7 @@ collections:
 	warnings := ValidateConfigForRuntime(testRuntime(repoPath), "config.yml")
 	assertWarningCode(t, warnings, "legacy_config")
 	assertNoWarningCode(t, warnings, "unknown_path_variable")
+	assertNoWarningCode(t, warnings, "invalid_media_folder")
 }
 
 func TestValidateConfigForRuntimeReportsLegacyConfigPathWithStaticDir(t *testing.T) {
@@ -116,6 +118,28 @@ content:
 		StaticDir:  "static",
 	}), ".homecms.yml")
 	assertWarningCode(t, warnings, "invalid_collection_folder")
+}
+
+func TestValidateConfigForRuntimeWarnsAboutArticleMediaFolderEscape(t *testing.T) {
+	repoPath := t.TempDir()
+	writeTestFile(t, filepath.Join(repoPath, ".homecms.yml"), `
+version: 1
+content:
+  collections:
+    - name: posts
+      folder: content/posts
+      media_folder: "{{dirname}}/../../shared"
+      fields:
+        - { name: slug, widget: string }
+`)
+
+	warnings := ValidateConfigForRuntime(config.NewSiteRuntime(config.SiteConfig{
+		ID:         "test",
+		RepoPath:   repoPath,
+		ContentDir: "content",
+		StaticDir:  "static",
+	}), ".homecms.yml")
+	assertWarningCode(t, warnings, "invalid_media_folder")
 }
 
 func TestValidateConfigForRuntimeReturnsEmptySliceForCleanHomeCMSConfig(t *testing.T) {

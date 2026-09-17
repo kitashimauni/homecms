@@ -54,6 +54,11 @@ type staticMediaTarget struct {
 	publicBase string
 }
 
+type articleMediaTarget struct {
+	articleDir string
+	targetDir  string
+}
+
 func ValidateMediaRepoPathForRuntime(runtime config.SiteRuntime, repoPath string) bool {
 	if repoPath == "" || !isAllowedMediaExtension(repoPath) {
 		return false
@@ -72,8 +77,96 @@ func ValidateMediaRepoPathForRuntime(runtime config.SiteRuntime, repoPath string
 	return SafeJoin(runtime.RepoPath, "", normalized) != ""
 }
 
+func ValidateArticleMediaRepoPathForRuntime(runtime config.SiteRuntime, articlePath, repoPath string) bool {
+	if repoPath == "" || !isAllowedMediaExtension(repoPath) {
+		return false
+	}
+	target, err := articleMediaTargetForRuntime(runtime, articlePath)
+	if err != nil {
+		return false
+	}
+	fullMediaPath := SafeJoin(runtime.RepoPath, "", filepath.ToSlash(filepath.Clean(repoPath)))
+	return fullMediaPath != "" && isPathWithin(target.targetDir, fullMediaPath) && isResolvedPathWithin(target.targetDir, fullMediaPath)
+}
+
+func articleMediaTargetForRuntime(runtime config.SiteRuntime, articlePath string) (articleMediaTarget, error) {
+	invalid := func(message string) (articleMediaTarget, error) {
+		return articleMediaTarget{}, fmt.Errorf("%w: %s", ErrInvalidMedia, message)
+	}
+
+	articlePath = strings.TrimSpace(filepath.ToSlash(articlePath))
+	fullArticlePath := SafeJoin(runtime.RepoPath, runtime.ContentDir, articlePath)
+	if fullArticlePath == "" {
+		return invalid("invalid article path")
+	}
+
+	collectionPath := filepath.ToSlash(filepath.Join(runtime.ContentDir, articlePath))
+	_, configSource, configErr := LoadCMSConfigForRuntime(runtime)
+	collection, collectionErr := GetCollectionForPathForRuntime(runtime, collectionPath)
+	collectionRoot := SafeJoin(runtime.RepoPath, "", filepath.ToSlash(filepath.Clean(runtime.ContentDir)))
+	if collectionErr == nil {
+		collectionFolder, err := CollectionFolderWithinContentForRuntime(runtime, *collection)
+		if err != nil {
+			return invalid("invalid collection folder")
+		}
+		collectionRoot = SafeJoin(runtime.RepoPath, "", collectionFolder)
+	}
+	if collectionRoot == "" {
+		return invalid("invalid content collection root")
+	}
+
+	extension := ".md"
+	if collection != nil && strings.TrimSpace(collection.Extension) != "" {
+		extension = "." + strings.TrimPrefix(strings.TrimSpace(collection.Extension), ".")
+	}
+	if !strings.EqualFold(filepath.Ext(fullArticlePath), extension) {
+		return invalid("invalid article path")
+	}
+
+	mediaFolder := ""
+	// Legacy Netlify/Sveltia collection media_folder values are not article
+	// media configuration. They are commonly absolute/template paths such as
+	// "/{{year}}{{month}}{{day}}-{{url_title}}/src" and were ignored by the
+	// previous runtime. Keep legacy page bundles on the ArticleMediaDir path.
+	if collection != nil && !(configErr == nil && configSource == legacyCMSConfigFile) {
+		mediaFolder = strings.TrimSpace(collection.MediaFolder)
+	}
+	if mediaFolder == "" {
+		mediaFolder = strings.TrimSpace(runtime.ArticleMediaDir)
+	}
+	if mediaFolder == "" {
+		baseName := strings.ToLower(filepath.Base(fullArticlePath))
+		if baseName == "index.md" || baseName == "_index.md" {
+			mediaFolder = "{{dirname}}"
+		} else {
+			return invalid("article media is not configured for this collection")
+		}
+	}
+
+	if filepath.IsAbs(mediaFolder) || strings.HasPrefix(mediaFolder, "/") || strings.HasPrefix(mediaFolder, `\`) || strings.Contains(mediaFolder, ":") {
+		return invalid("invalid article media folder")
+	}
+	mediaFolder = strings.ReplaceAll(mediaFolder, "{{dirname}}", "")
+	mediaFolder = strings.TrimLeft(strings.TrimSpace(mediaFolder), `/\`)
+	if strings.Contains(mediaFolder, "{{") || strings.Contains(mediaFolder, "}}") || strings.Contains(mediaFolder, ":") {
+		return invalid("invalid article media folder")
+	}
+	articleDir := filepath.Dir(fullArticlePath)
+	targetDir := SafeJoin(articleDir, "", mediaFolder)
+	contentRoot := filepath.Join(runtime.RepoPath, runtime.ContentDir)
+	if targetDir == "" ||
+		!isPathWithin(collectionRoot, targetDir) ||
+		!isResolvedPathWithin(collectionRoot, targetDir) ||
+		!isPathWithin(contentRoot, targetDir) ||
+		!isResolvedPathWithin(contentRoot, targetDir) {
+		return invalid("article media folder is outside the collection")
+	}
+	return articleMediaTarget{articleDir: articleDir, targetDir: targetDir}, nil
+}
+
 func ListMediaFilesForRuntime(runtime config.SiteRuntime, mode, articlePath string) ([]MediaFile, error) {
 	var searchDirs []string
+	usageRoots := make(map[string]string)
 	if mode == "" {
 		mode = "static"
 	}
@@ -92,15 +185,13 @@ func ListMediaFilesForRuntime(runtime config.SiteRuntime, mode, articlePath stri
 		if articlePath == "" {
 			return nil, nil // No article context, return empty
 		}
-		fullArticlePath := SafeJoin(runtime.RepoPath, runtime.ContentDir, articlePath)
-		if fullArticlePath == "" || strings.ToLower(filepath.Ext(fullArticlePath)) != ".md" {
-			return nil, fmt.Errorf("%w: invalid article path", ErrInvalidMedia)
+		target, err := articleMediaTargetForRuntime(runtime, articlePath)
+		if err != nil {
+			return nil, err
 		}
-		// Assuming articlePath is "posts/2024/slug/index.md" (relative to content)
-		// We want to list files in "repo/content/posts/2024/slug"
-		fullBundlePath := filepath.Dir(fullArticlePath)
-		if _, err := os.Stat(fullBundlePath); err == nil {
-			searchDirs = append(searchDirs, fullBundlePath)
+		if _, err := os.Stat(target.targetDir); err == nil {
+			searchDirs = append(searchDirs, target.targetDir)
+			usageRoots[target.targetDir] = target.articleDir
 		}
 	} else {
 		return nil, fmt.Errorf("%w: invalid media mode", ErrInvalidMedia)
@@ -139,9 +230,8 @@ func ListMediaFilesForRuntime(runtime config.SiteRuntime, mode, articlePath stri
 					}
 					usagePath = joinPublicPath(staticMedia.publicBase, filepath.ToSlash(staticRel))
 				} else {
-					// content/posts/slug/img.png -> img.png (Page Bundle)
-					// Or if in subfolder src/img.png -> src/img.png
-					bundleRel, relErr := filepath.Rel(root, path)
+					articleRoot := usageRoots[root]
+					bundleRel, relErr := filepath.Rel(articleRoot, path)
 					if relErr != nil {
 						return relErr
 					}
@@ -196,6 +286,7 @@ func SaveMediaFileForRuntime(runtime config.SiteRuntime, header *multipart.FileH
 	filename = fmt.Sprintf("%s_%d%s", name, time.Now().UnixNano(), ext)
 
 	var targetDir string
+	articleUsageRoot := ""
 	staticMedia := staticMediaTargetForRuntime(runtime)
 
 	if mode == "static" {
@@ -205,12 +296,12 @@ func SaveMediaFileForRuntime(runtime config.SiteRuntime, header *multipart.FileH
 		if articlePath == "" {
 			return nil, fmt.Errorf("%w: article path required for content upload", ErrInvalidMedia)
 		}
-		fullArticlePath := SafeJoin(runtime.RepoPath, runtime.ContentDir, articlePath)
-		if fullArticlePath == "" || strings.ToLower(filepath.Ext(fullArticlePath)) != ".md" {
-			return nil, fmt.Errorf("%w: invalid article path", ErrInvalidMedia)
+		target, err := articleMediaTargetForRuntime(runtime, articlePath)
+		if err != nil {
+			return nil, err
 		}
-		// Use ARTICLE_MEDIA_DIR config, constrained to the article bundle.
-		targetDir = SafeJoin(filepath.Dir(fullArticlePath), "", runtime.ArticleMediaDir)
+		targetDir = target.targetDir
+		articleUsageRoot = target.articleDir
 	} else {
 		return nil, fmt.Errorf("%w: invalid media mode", ErrInvalidMedia)
 	}
@@ -276,13 +367,7 @@ func SaveMediaFileForRuntime(runtime config.SiteRuntime, header *multipart.FileH
 		}
 		usagePath = joinPublicPath(staticMedia.publicBase, filepath.ToSlash(staticRel))
 	} else {
-		// Relative to bundle root
-		// targetDir is bundle + subDir
-		// We need path relative to bundle root.
-		// Bundle root is targetDir without subDir (if subDir is relative)
-		// Actually simpler:
-		bundleRoot := filepath.Dir(SafeJoin(runtime.RepoPath, runtime.ContentDir, articlePath))
-		bundleRel, relErr := filepath.Rel(bundleRoot, fullMediaPath)
+		bundleRel, relErr := filepath.Rel(articleUsageRoot, fullMediaPath)
 		if relErr != nil {
 			return nil, relErr
 		}
@@ -299,10 +384,22 @@ func SaveMediaFileForRuntime(runtime config.SiteRuntime, header *multipart.FileH
 }
 
 func DeleteMediaFileForRuntime(runtime config.SiteRuntime, repoPath string) error {
+	return deleteMediaFileForRuntime(runtime, repoPath, "")
+}
+
+func DeleteArticleMediaFileForRuntime(runtime config.SiteRuntime, repoPath, articlePath string) error {
+	return deleteMediaFileForRuntime(runtime, repoPath, articlePath)
+}
+
+func deleteMediaFileForRuntime(runtime config.SiteRuntime, repoPath, articlePath string) error {
 	unlock := LockRepositoryOperation(runtime)
 	defer unlock()
 
-	if !ValidateMediaRepoPathForRuntime(runtime, repoPath) {
+	valid := ValidateMediaRepoPathForRuntime(runtime, repoPath)
+	if articlePath != "" {
+		valid = ValidateArticleMediaRepoPathForRuntime(runtime, articlePath, repoPath)
+	}
+	if !valid {
 		return fmt.Errorf("%w: invalid media path", ErrInvalidMedia)
 	}
 	fullMediaPath := SafeJoin(runtime.RepoPath, "", repoPath)

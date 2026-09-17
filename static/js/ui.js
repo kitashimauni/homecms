@@ -846,7 +846,17 @@ export function showToast(message, type = 'info') {
     }, 5000);
 }
 
-export async function showMediaLibrary(onSelect, collectionName = null, currentPath = null) {
+export function canUseArticleMedia(currentPath, collection = null, config = null) {
+    const normalizedPath = normalizePath(currentPath);
+    if (!normalizedPath) return false;
+    const isBundle = normalizedPath.endsWith('/index.md') || normalizedPath.endsWith('/_index.md');
+    const isLegacyConfig = config?._cms?.config_source === 'config.yml';
+    const collectionMediaFolder = !isLegacyConfig && typeof collection?.media_folder === 'string' ? collection.media_folder.trim() : '';
+    const legacyMediaFolder = typeof config?._cms?.article_media_dir === 'string' ? config._cms.article_media_dir.trim() : '';
+    return isBundle || Boolean(collectionMediaFolder || legacyMediaFolder);
+}
+
+export async function showMediaLibrary(onSelect, collectionName = null, currentPath = null, config = null) {
     const overlay = document.getElementById('modal-overlay');
     const header = document.getElementById('modal-header');
     const body = document.getElementById('modal-body');
@@ -880,12 +890,13 @@ export async function showMediaLibrary(onSelect, collectionName = null, currentP
     const tabStatic = createTab('static', 'Static');
     const tabArticle = createTab('content', 'Article');
 
-    const isBundle = currentPath && (currentPath.endsWith('/index.md') || currentPath.endsWith('/_index.md'));
+    const collection = config?.collections?.find(item => item.name === collectionName) || getCollectionForPath(currentPath, config);
+    const articleMediaEnabled = canUseArticleMedia(currentPath, collection, config);
 
-    if (!isBundle) {
+    if (!articleMediaEnabled) {
         tabArticle.disabled = true;
         tabArticle.style.opacity = '0.5';
-        tabArticle.title = "Only available for page bundles (index.md)";
+        tabArticle.title = "Article media is not configured for this collection";
     }
 
     tabs.appendChild(tabStatic);
@@ -911,10 +922,10 @@ export async function showMediaLibrary(onSelect, collectionName = null, currentP
     };
 
     tabStatic.onclick = () => switchTab('static');
-    tabArticle.onclick = () => { if(isBundle) switchTab('content'); };
+    tabArticle.onclick = () => { if(articleMediaEnabled) switchTab('content'); };
 
     // Default tab
-    switchTab(isBundle ? 'content' : 'static');
+    switchTab(articleMediaEnabled ? 'content' : 'static');
 }
 
 async function loadAndRenderMedia(container, mode, currentPath, onSelect) {
@@ -1023,7 +1034,7 @@ function renderMediaGrid(container, files, mode, currentPath, onSelect) {
             e.stopPropagation();
             if (!confirm(`Delete ${f.name}?`)) return;
             try {
-                const result = await API.deleteMedia(f.repo_path);
+                const result = await API.deleteMedia(f.repo_path, mode === 'content' ? currentPath : '');
                 if (result?.local_preview_sync === false) {
                     showToast("Deleted, but Local Live Preview sync failed", "warning");
                 } else {
