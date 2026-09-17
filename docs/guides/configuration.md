@@ -240,7 +240,9 @@ media:
   public_path: /images
 ```
 
-`media.folder`はリポジトリルート基準です。`static_media_dir` / `STATIC_MEDIA_DIR`を明示していないサイトでは、この値がstatic media modeの保存先になります。
+`media.folder`はリポジトリルート基準です。`static_media_dir` / `STATIC_MEDIA_DIR`を明示していないサイトでは、この値がstatic media modeの保存先になります。Issue #112では通常のMarkdown記事に対するcollection単位のArticle Media解決を追加しています。
+
+通常のMarkdown記事でArticle Mediaを使う場合は、collectionに `media_folder: "{{dirname}}"` または `media_folder: "{{dirname}}/images"` を指定します。`{{dirname}}`は記事Markdownのディレクトリに展開され、一覧・upload・deleteの対象とMarkdown挿入pathで共通して使われます。既存サイトでは `ARTICLE_MEDIA_DIR` またはSite Registryの `article_media_dir` も利用できます。
 
 `content.collections[].path`で`{{slug}}`のような変数を使う場合は、作成フォームから値を送信できるように同名のfieldを定義してください。
 

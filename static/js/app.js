@@ -142,7 +142,7 @@ async function init() {
         UI.showMediaLibrary((file) => {
             const markdown = `![${file.name}](${file.path})`;
             Editor.insertText(markdown);
-        }, collectionName, currentPath);
+        }, collectionName, currentPath, cmsConfig);
     };
     window.insertSnippet = async () => {
         try {

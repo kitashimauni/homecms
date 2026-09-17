@@ -95,7 +95,8 @@ func DeleteMedia(c *gin.Context) {
 		return
 	}
 	var req struct {
-		RepoPath string `json:"repo_path"`
+		RepoPath    string `json:"repo_path"`
+		ArticlePath string `json:"article_path"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		ErrorBadRequest(c, "Invalid JSON")
@@ -108,7 +109,11 @@ func DeleteMedia(c *gin.Context) {
 		return
 	}
 
-	if !services.ValidateMediaRepoPathForRuntime(runtime, req.RepoPath) {
+	validPath := services.ValidateMediaRepoPathForRuntime(runtime, req.RepoPath)
+	if req.ArticlePath != "" {
+		validPath = services.ValidateArticleMediaRepoPathForRuntime(runtime, req.ArticlePath, req.RepoPath)
+	}
+	if !validPath {
 		ErrorBadRequest(c, "Invalid media path")
 		return
 	}
@@ -117,7 +122,11 @@ func DeleteMedia(c *gin.Context) {
 		slog.Warn("Failed to prepare Local Live Preview metadata before media deletion", "site", runtime.ID, "path", req.RepoPath, "error", err)
 	}
 
-	if err := services.DeleteMediaFileForRuntime(runtime, req.RepoPath); err != nil {
+	deleteErr := services.DeleteMediaFileForRuntime(runtime, req.RepoPath)
+	if req.ArticlePath != "" {
+		deleteErr = services.DeleteArticleMediaFileForRuntime(runtime, req.RepoPath, req.ArticlePath)
+	}
+	if err := deleteErr; err != nil {
 		ErrorInternal(c, "Failed to delete: "+err.Error())
 		return
 	}

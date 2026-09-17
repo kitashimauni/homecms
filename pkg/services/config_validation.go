@@ -133,6 +133,10 @@ func validateCMSConfig(runtime config.SiteRuntime, cfg models.CMSConfig, source 
 			warnings = append(warnings, configWarning("warning", "unsupported_frontmatter", pathPrefix+".frontmatter", fmt.Sprintf("Front matter format %q is not supported; use yaml, toml, or json.", format)))
 		}
 
+		if mediaFolder := strings.TrimSpace(collection.MediaFolder); mediaFolder != "" && !isSafeArticleMediaFolder(mediaFolder) {
+			warnings = append(warnings, configWarning("error", "invalid_media_folder", pathPrefix+".media_folder", "Collection media_folder must stay within the article directory and collection."))
+		}
+
 		warnings = append(warnings, validatePathTemplate(source, pathPrefix+".path", collection.Path, fieldNames)...)
 	}
 
@@ -152,6 +156,19 @@ func validateCMSConfig(runtime config.SiteRuntime, cfg models.CMSConfig, source 
 	}
 
 	return warnings
+}
+
+func isSafeArticleMediaFolder(folder string) bool {
+	folder = strings.TrimSpace(filepath.ToSlash(folder))
+	if folder == "" || filepath.IsAbs(folder) || strings.HasPrefix(folder, "/") || strings.HasPrefix(folder, `\`) || strings.Contains(folder, ":") {
+		return false
+	}
+	folder = strings.ReplaceAll(folder, "{{dirname}}", "")
+	folder = strings.TrimLeft(strings.TrimSpace(folder), "/")
+	if strings.Contains(folder, "{{") || strings.Contains(folder, "}}") {
+		return false
+	}
+	return folder == "" || cleanConfigPath(folder) != ""
 }
 
 func validatePathTemplate(source, path, template string, fieldNames map[string]bool) []ConfigWarning {

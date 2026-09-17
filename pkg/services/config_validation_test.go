@@ -118,6 +118,28 @@ content:
 	assertWarningCode(t, warnings, "invalid_collection_folder")
 }
 
+func TestValidateConfigForRuntimeWarnsAboutArticleMediaFolderEscape(t *testing.T) {
+	repoPath := t.TempDir()
+	writeTestFile(t, filepath.Join(repoPath, ".homecms.yml"), `
+version: 1
+content:
+  collections:
+    - name: posts
+      folder: content/posts
+      media_folder: "{{dirname}}/../../shared"
+      fields:
+        - { name: slug, widget: string }
+`)
+
+	warnings := ValidateConfigForRuntime(config.NewSiteRuntime(config.SiteConfig{
+		ID:         "test",
+		RepoPath:   repoPath,
+		ContentDir: "content",
+		StaticDir:  "static",
+	}), ".homecms.yml")
+	assertWarningCode(t, warnings, "invalid_media_folder")
+}
+
 func TestValidateConfigForRuntimeReturnsEmptySliceForCleanHomeCMSConfig(t *testing.T) {
 	repoPath := t.TempDir()
 	writeTestFile(t, filepath.Join(repoPath, ".homecms.yml"), `

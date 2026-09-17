@@ -483,14 +483,15 @@ func GetConfig(c *gin.Context) {
 	delete(cfg, "_config_source")
 	warnings := services.ValidateConfigForRuntime(runtime, configSource)
 	cfg["_cms"] = gin.H{
-		"content_dir":    runtime.ContentDir,
-		"static_dir":     runtime.StaticDir,
-		"public_dir":     runtime.PublicDir,
-		"site_generator": runtime.Generator,
-		"default_site":   config.DefaultSiteID,
-		"site_id":        runtime.ID,
-		"config_source":  configSource,
-		"warnings":       warnings,
+		"content_dir":       runtime.ContentDir,
+		"static_dir":        runtime.StaticDir,
+		"public_dir":        runtime.PublicDir,
+		"article_media_dir": runtime.ArticleMediaDir,
+		"site_generator":    runtime.Generator,
+		"default_site":      config.DefaultSiteID,
+		"site_id":           runtime.ID,
+		"config_source":     configSource,
+		"warnings":          warnings,
 		"markdown_preview": gin.H{
 			"enabled": runtime.MarkdownPreviewEnabled,
 		},

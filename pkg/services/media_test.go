@@ -2,6 +2,8 @@ package services
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"hugo-cms/pkg/config"
 	"mime/multipart"
 	"net/http/httptest"
@@ -224,6 +226,113 @@ func TestSaveMediaFileWritesValidatedImage(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repoPath, filepath.FromSlash(media.RepoPath))); err != nil {
 		t.Fatalf("saved media file not found: %v", err)
+	}
+}
+
+func articleMediaTestRuntime(t *testing.T, mediaFolder string) config.SiteRuntime {
+	t.Helper()
+	repoPath := t.TempDir()
+	writeTestFile(t, filepath.Join(repoPath, ".homecms.yml"), fmt.Sprintf(`
+version: 1
+content:
+  collections:
+    - name: posts
+      folder: content/posts
+      media_folder: %q
+`, mediaFolder))
+	runtime := config.NewSiteRuntime(config.SiteConfig{
+		ID:             "test",
+		RepoPath:       repoPath,
+		Generator:      "eleventy",
+		ContentDir:     "content",
+		StaticDir:      "static",
+		PublicDir:      "_site",
+		PreviewURL:     "/",
+		HugoServerBind: "127.0.0.1",
+		HugoServerPort: "1314",
+	})
+	originalMaxSize := config.MaxUploadSize
+	config.MaxUploadSize = 1024 * 1024
+	t.Cleanup(func() { config.MaxUploadSize = originalMaxSize })
+	return runtime
+}
+
+func TestArticleMediaUsesCollectionFolderForNormalArticle(t *testing.T) {
+	runtime := articleMediaTestRuntime(t, "{{dirname}}")
+	articlePath := "posts/20260608/takao.md"
+	articleDir := filepath.Join(runtime.RepoPath, "content", "posts", "20260608")
+	writeTestFile(t, filepath.Join(articleDir, "takao.md"), "---\ntitle: Takao\n---\n")
+	writeTestFile(t, filepath.Join(articleDir, "existing.jpg"), "existing image")
+
+	files, err := ListMediaFilesForRuntime(runtime, "content", articlePath)
+	if err != nil {
+		t.Fatalf("ListMediaFilesForRuntime() error = %v", err)
+	}
+	if len(files) != 1 || files[0].Path != "existing.jpg" || files[0].RepoPath != "content/posts/20260608/existing.jpg" {
+		t.Fatalf("ListMediaFilesForRuntime() = %#v, want article-relative existing.jpg", files)
+	}
+
+	header := testFileHeader(t, "image.png", []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	})
+	media, err := SaveMediaFileForRuntime(runtime, header, "content", articlePath)
+	if err != nil {
+		t.Fatalf("SaveMediaFileForRuntime() error = %v", err)
+	}
+	if !strings.HasPrefix(media.RepoPath, "content/posts/20260608/image_") || media.Path != filepath.Base(media.RepoPath) {
+		t.Fatalf("saved media = %#v, want article-directory path", media)
+	}
+	if !ValidateArticleMediaRepoPathForRuntime(runtime, articlePath, media.RepoPath) {
+		t.Fatalf("saved media path %q should be valid for article", media.RepoPath)
+	}
+
+	if err := DeleteArticleMediaFileForRuntime(runtime, media.RepoPath, articlePath); err != nil {
+		t.Fatalf("DeleteArticleMediaFileForRuntime() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runtime.RepoPath, filepath.FromSlash(media.RepoPath))); !os.IsNotExist(err) {
+		t.Fatalf("deleted media still exists, stat error = %v", err)
+	}
+}
+
+func TestArticleMediaUsesCollectionSubdirectory(t *testing.T) {
+	runtime := articleMediaTestRuntime(t, "{{dirname}}/images")
+	articlePath := "posts/20260608/takao.md"
+	articleDir := filepath.Join(runtime.RepoPath, "content", "posts", "20260608")
+	writeTestFile(t, filepath.Join(articleDir, "takao.md"), "---\ntitle: Takao\n---\n")
+	writeTestFile(t, filepath.Join(articleDir, "sibling.jpg"), "not in media folder")
+	writeTestFile(t, filepath.Join(articleDir, "images", "existing.jpg"), "existing image")
+
+	files, err := ListMediaFilesForRuntime(runtime, "content", articlePath)
+	if err != nil {
+		t.Fatalf("ListMediaFilesForRuntime() error = %v", err)
+	}
+	if len(files) != 1 || files[0].Path != "images/existing.jpg" {
+		t.Fatalf("ListMediaFilesForRuntime() = %#v, want only images/existing.jpg", files)
+	}
+	if ValidateArticleMediaRepoPathForRuntime(runtime, articlePath, "content/posts/20260608/sibling.jpg") {
+		t.Fatal("sibling media outside the configured target should be rejected")
+	}
+
+	header := testFileHeader(t, "image.png", []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	})
+	media, err := SaveMediaFileForRuntime(runtime, header, "content", articlePath)
+	if err != nil {
+		t.Fatalf("SaveMediaFileForRuntime() error = %v", err)
+	}
+	if !strings.HasPrefix(media.RepoPath, "content/posts/20260608/images/image_") || !strings.HasPrefix(media.Path, "images/") {
+		t.Fatalf("saved media = %#v, want images-relative path", media)
+	}
+}
+
+func TestArticleMediaRejectsCollectionEscape(t *testing.T) {
+	runtime := articleMediaTestRuntime(t, "{{dirname}}/../../shared")
+	articlePath := "posts/20260608/takao.md"
+	articleDir := filepath.Join(runtime.RepoPath, "content", "posts", "20260608")
+	writeTestFile(t, filepath.Join(articleDir, "takao.md"), "---\ntitle: Takao\n---\n")
+
+	if _, err := ListMediaFilesForRuntime(runtime, "content", articlePath); !errors.Is(err, ErrInvalidMedia) {
+		t.Fatalf("ListMediaFilesForRuntime() error = %v, want invalid media", err)
 	}
 }
 
