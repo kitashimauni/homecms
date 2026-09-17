@@ -191,12 +191,12 @@ export async function getDiff(payload) {
     return await res.json();
 }
 
-export async function runSync() {
+export async function runSync(siteID = currentSite) {
     await ensureCSRFToken();
-    const res = await fetch(withSite('/admin/api/sync'), {
+    const res = await fetch(withSite('/admin/api/sync', siteID), {
         method: 'POST',
         headers: {
-            ...siteHeaders(),
+            ...siteHeaders(siteID),
             ...getCSRFHeaders()
         }
     });
