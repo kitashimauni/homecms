@@ -42,6 +42,22 @@ describe("site-scoped preview API contracts", () => {
         );
     });
 
+    it("pins Git Sync to its explicit site", async () => {
+        const calls = [];
+        globalThis.fetch = async (url, options = {}) => {
+            calls.push({ url, options });
+            if (url === "/admin/api/csrf-token") return { ok: true, status: 200, json: async () => ({ csrf_token: "csrf" }) };
+            return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
+        };
+
+        API.setCurrentSite("site-a");
+        await API.runSync("site-b");
+
+        const request = calls.find(call => call.url === "/admin/api/sync?site=site-b");
+        assert.ok(request);
+        assert.equal(request.options.headers["X-CMS-Site"], "site-b");
+    });
+
     it("pins read requests to their explicit site", async () => {
         const calls = [];
         globalThis.fetch = async (url, options = {}) => {

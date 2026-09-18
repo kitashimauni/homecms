@@ -7,6 +7,7 @@ import {
     publishStatusLabel,
 } from './publish.js';
 import { createSiteRequestTracker } from './site_request.js';
+import { reloadConfigAfterSync } from './config_reload.js';
 import {
     createLocalPreviewFrameController,
     isLocalPreviewBuildCoveredByLiveReload,
@@ -227,13 +228,7 @@ async function loadSiteData(siteID = API.getCurrentSite(), request = null) {
     const config = await API.fetchConfig(siteID, request?.controller.signal);
     if (!isCurrent()) return false;
 
-    cmsConfig = config;
-    const site = siteRegistry?.sites?.find(s => s.id === siteID);
-    if (!cmsConfig._cms) cmsConfig._cms = {};
-    cmsConfig._cms.local_preview = site?.preview?.local_preview || { enabled: false, url: '' };
-    Editor.setConfig(cmsConfig);
-    UI.renderConfigWarnings(cmsConfig);
-
+    applyCMSConfig(config, siteID);
     localPreviewEnabled = cmsConfig?._cms?.local_preview?.enabled === true && Boolean(localPreviewURL());
     configureLocalPreviewPanel();
     previewEngine = localPreviewEnabled ? 'local' : 'markdown';
@@ -251,6 +246,56 @@ async function loadSiteData(siteID = API.getCurrentSite(), request = null) {
     updatePublishButtonAvailability();
     await refreshFileList(siteID, request, generation);
     return isCurrent();
+}
+
+function applyCMSConfig(config, siteID = API.getCurrentSite()) {
+    cmsConfig = config || {};
+    const site = siteRegistry?.sites?.find(s => s.id === siteID);
+    if (!cmsConfig._cms) cmsConfig._cms = {};
+    cmsConfig._cms.local_preview = site?.preview?.local_preview || { enabled: false, url: '' };
+    Editor.setConfig(cmsConfig);
+    UI.renderConfigWarnings(cmsConfig);
+}
+
+async function reloadCMSConfigAfterSync(siteID, generation) {
+    return reloadConfigAfterSync({
+        siteID,
+        generation,
+        fetchConfig: API.fetchConfig,
+        isCurrent: isCurrentSiteContext,
+        applyConfig: config => applyCMSConfig(config, siteID),
+    });
+}
+
+async function reconcileConfigDependentUIAfterSync(siteID, generation) {
+    if (!isCurrentSiteContext(siteID, generation)) return false;
+
+    resetLocalPreviewArticleURL();
+    localPreviewEnabled = cmsConfig?._cms?.local_preview?.enabled === true && Boolean(localPreviewURL());
+    if (!localPreviewEnabled) {
+        stopLocalPreviewMonitoring();
+        closeEmbeddedLocalPreview();
+        if (previewEngine === 'local') {
+            previewEngine = 'markdown';
+            UI.setPreviewEngine(previewEngine);
+        }
+    } else {
+        configureLocalPreviewPanel();
+        await refreshLocalPreviewStatus(siteID, null, generation);
+        if (!isCurrentSiteContext(siteID, generation)) return false;
+        scheduleLocalPreviewMonitoring(siteID, generation);
+    }
+
+    stopDeploymentPolling();
+    deploymentState = null;
+    deploymentEnabled = UI.configureDeploymentPreview(cmsConfig);
+    UI.renderDeploymentState(null);
+    updatePublishButtonAvailability();
+    if (deploymentEnabled && Editor.getCurrentPath()) {
+        await refreshDeploymentState(siteID, generation);
+        if (!isCurrentSiteContext(siteID, generation)) return false;
+    }
+    return true;
 }
 
 async function switchSite(siteID) {
@@ -966,6 +1011,9 @@ async function stopLocalLivePreview() {
 async function runSync() {
     if (!confirm("GitHubから最新の状態を取得しますか？\n（ローカルの未保存の変更は注意してください）")) return;
 
+    const siteID = API.getCurrentSite();
+    const siteGeneration = siteRequestTracker.generation;
+
     const btn = document.querySelector('button[onclick="runSync()"]');
     const originalText = btn ? btn.textContent : "Sync";
     const originalDisabled = btn ? btn.disabled : false;
@@ -985,18 +1033,34 @@ async function runSync() {
         await Editor.prepareForGitSync();
         previewPrepared = true;
 
-        const data = await API.runSync();
+        const data = await API.runSync(siteID);
         syncResponseReceived = true;
         if (data.status === 'ok') {
             syncCompleted = true;
+            if (!isCurrentSiteContext(siteID, siteGeneration)) return;
             resetLocalPreviewArticleURL();
             closeEmbeddedLocalPreview();
-            if (data.local_preview_reset === false) {
+
+            let configReloaded = false;
+            try {
+                configReloaded = await reloadCMSConfigAfterSync(siteID, siteGeneration);
+            } catch (configError) {
+                if (!isCurrentSiteContext(siteID, siteGeneration)) return;
+                console.error("Failed to reload CMS config after Git Sync", configError);
+            }
+            if (!configReloaded) {
+                if (!isCurrentSiteContext(siteID, siteGeneration)) return;
+                UI.showToast("Sync Complete, but CMS config reload failed", "warning");
+            } else if (data.local_preview_reset === false) {
                 UI.showToast("Sync Complete, but Local Live Preview reset failed", "warning");
+                await reconcileConfigDependentUIAfterSync(siteID, siteGeneration);
             } else {
+                await reconcileConfigDependentUIAfterSync(siteID, siteGeneration);
+                if (!isCurrentSiteContext(siteID, siteGeneration)) return;
                 UI.showToast("Sync Complete", "success");
             }
-            const files = await refreshFileList();
+            if (!isCurrentSiteContext(siteID, siteGeneration)) return;
+            const files = await refreshFileList(siteID, null, siteGeneration);
             if (currentPath && Array.isArray(files)) {
                 // The user may have edited the article while Sync was
                 // running. Evaluate the state after the response, not before
@@ -1016,11 +1080,13 @@ async function runSync() {
                     await Editor.loadFile(currentPath, { allowDuringGitSync: true });
                 }
             }
-            await refreshLocalPreviewStatus();
+            await refreshLocalPreviewStatus(siteID, null, siteGeneration);
         } else {
+            if (!isCurrentSiteContext(siteID, siteGeneration)) return;
             UI.showToast("Sync Error: " + data.log, "error");
         }
     } catch (e) {
+        if (!isCurrentSiteContext(siteID, siteGeneration)) return;
         if (e?.status) {
             syncResponseReceived = true;
             UI.showToast(`Sync failed: ${e.message}`, e.status === 409 ? "warning" : "error");
