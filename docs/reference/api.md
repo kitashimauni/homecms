@@ -459,6 +459,8 @@ Git Sync成功後は、対象siteのLocal Live Preview processとshadow workspac
 
 `preview`ではrequestの`path`がpreview stateへ保存されたarticle pathと一致する必要があります。異なる場合や、working tree・remote branch・PR headがpreview済みcommitと一致しない場合はHTTP 409を返します。`direct`ではPublish開始前にUIが保留中の保存を完了し、現在のworking treeを対象にします。
 
+draft branchの更新では、push直前に観測したremote branchのSHAを`--force-with-lease`の期待値として使用します。remote branchが存在しない場合は「存在しないこと」をlease条件にして再作成し、localに残った古いdraft refをremoteの期待値には使用しません。remote branchの観測に失敗した場合はpushせず、Publishを失敗させます。
+
 **リクエストボディ**:
 ```json
 {
