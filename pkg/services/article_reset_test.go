@@ -15,12 +15,11 @@ func TestResetArticleToHEADRestoresOnlyArticle(t *testing.T) {
 	articleFile := filepath.Join(runtime.RepoPath, "content", articlePath)
 	mediaFile := filepath.Join(runtime.RepoPath, "static", "images", "keep.png")
 	writeSyncTestFile(t, mediaFile, "HEAD media\n")
-	runSyncGitOutput(t, runtime.RepoPath, "add", "static/images/keep.png")
-	runSyncGitOutput(t, runtime.RepoPath, "commit", "-m", "add media")
+	commitSyncTestChanges(t, runtime.RepoPath, "add media")
 	writeSyncTestFile(t, articleFile, "local unpublished change\n")
 	writeSyncTestFile(t, mediaFile, "locally changed media\n")
 
-	result, err := ResetArticleToHEADForRuntime(runtime, articlePath)
+	result, err := ResetArticleToHEADForRuntime(runtime, articlePath, true)
 	if err != nil {
 		t.Fatalf("ResetArticleToHEADForRuntime() error = %v", err)
 	}
@@ -46,12 +45,23 @@ func TestResetArticleToHEADDeletesNewArticleButKeepsMedia(t *testing.T) {
 	writeSyncTestFile(t, articleFile, "new article\n")
 	writeSyncTestFile(t, mediaFile, "article media\n")
 
-	result, err := ResetArticleToHEADForRuntime(runtime, articlePath)
+	result, err := ResetArticleToHEADForRuntime(runtime, articlePath, false)
 	if err != nil {
 		t.Fatalf("ResetArticleToHEADForRuntime() error = %v", err)
 	}
-	if result.HeadExists || !result.Deleted {
-		t.Fatalf("reset result = %#v, want deleted new article", result)
+	if result.HeadExists || result.Deleted || !result.RequiresDeleteConfirmation {
+		t.Fatalf("reset result = %#v, want explicit delete confirmation", result)
+	}
+	if _, err := os.Stat(articleFile); err != nil {
+		t.Fatalf("new article changed before confirmation: %v", err)
+	}
+
+	result, err = ResetArticleToHEADForRuntime(runtime, articlePath, true)
+	if err != nil {
+		t.Fatalf("confirmed ResetArticleToHEADForRuntime() error = %v", err)
+	}
+	if result.HeadExists || !result.Deleted || result.RequiresDeleteConfirmation {
+		t.Fatalf("confirmed reset result = %#v, want deleted new article", result)
 	}
 	if _, err := os.Stat(articleFile); !os.IsNotExist(err) {
 		t.Fatalf("new article still exists, stat error = %v", err)
@@ -63,7 +73,7 @@ func TestResetArticleToHEADDeletesNewArticleButKeepsMedia(t *testing.T) {
 
 func TestResetArticleToHEADRejectsUnsafePath(t *testing.T) {
 	runtime, _ := setupSyncRepository(t)
-	_, err := ResetArticleToHEADForRuntime(runtime, "../outside.md")
+	_, err := ResetArticleToHEADForRuntime(runtime, "../outside.md", true)
 	if !errors.Is(err, ErrInvalidArticleResetPath) {
 		t.Fatalf("ResetArticleToHEADForRuntime() error = %v, want invalid path", err)
 	}
@@ -83,7 +93,7 @@ func TestResetArticleToHEADRejectsSymlinkPath(t *testing.T) {
 		t.Skipf("symlinks are not available in this environment: %v", err)
 	}
 
-	_, err := ResetArticleToHEADForRuntime(runtime, "selected.md")
+	_, err := ResetArticleToHEADForRuntime(runtime, "selected.md", true)
 	if !errors.Is(err, ErrInvalidArticleResetPath) {
 		t.Fatalf("ResetArticleToHEADForRuntime() error = %v, want symlink rejection", err)
 	}
@@ -91,15 +101,22 @@ func TestResetArticleToHEADRejectsSymlinkPath(t *testing.T) {
 
 func TestResetArticleToHEADRequiresGitHEAD(t *testing.T) {
 	repoPath := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoPath, "content"), 0755); err != nil {
+	articlePath := filepath.Join(repoPath, "content", "article.md")
+	if err := os.MkdirAll(filepath.Dir(articlePath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(articlePath, []byte("local article\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	runtime := config.NewSiteRuntime(config.SiteConfig{RepoPath: repoPath, ContentDir: "content"})
-	_, err := ResetArticleToHEADForRuntime(runtime, "article.md")
+	_, err := ResetArticleToHEADForRuntime(runtime, "article.md", true)
 	if err == nil {
 		t.Fatal("ResetArticleToHEADForRuntime() should reject a repository without HEAD")
 	}
 	if _, ok := err.(*exec.ExitError); ok {
 		t.Fatalf("ResetArticleToHEADForRuntime() leaked git command error: %v", err)
+	}
+	if content, readErr := os.ReadFile(articlePath); readErr != nil || string(content) != "local article\n" {
+		t.Fatalf("article after Git HEAD lookup failure = %q, read error = %v", content, readErr)
 	}
 }

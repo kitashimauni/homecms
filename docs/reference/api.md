@@ -204,7 +204,8 @@ CSRFトークンを取得します。
 **リクエストボディ**:
 ```json
 {
-    "path": "posts/2026-01-10-hello/index.md"
+    "path": "posts/2026-01-10-hello/index.md",
+    "confirm_delete": false
 }
 ```
 
@@ -218,7 +219,18 @@ CSRFトークンを取得します。
 }
 ```
 
-新規記事を削除した場合は `status` が `deleted`、`deleted` が `true` になります。Local Live Previewの同期に失敗しても記事のReset自体は成功し、`local_preview_sync` が `false` になります。
+`HEAD` に存在しない新規記事に対して `confirm_delete` を指定しない場合、サーバーは削除せずHTTP 409を返します。UIは専用の削除確認を表示し、確認後に `confirm_delete: true` で再試行します。
+
+```json
+{
+    "status": "error",
+    "code": "RESET_REQUIRES_DELETE_CONFIRMATION",
+    "requires_delete_confirmation": true,
+    "message": "Article is not present in Git HEAD; confirmation is required to delete it"
+}
+```
+
+確認済みの新規記事を削除した場合は `status` が `deleted`、`deleted` が `true` になります。Local Live Previewの同期に失敗しても記事のReset自体は成功し、`local_preview_sync` が `false` になります。
 
 ### POST /admin/api/create
 

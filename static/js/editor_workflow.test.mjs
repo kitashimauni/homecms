@@ -274,6 +274,48 @@ describe("Local Preview destructive operations", () => {
         }
     });
 
+    it("asks for a dedicated confirmation before deleting a new article", async () => {
+        const previousConfirm = globalThis.confirm;
+        let resetCalls = 0;
+        const confirmMessages = [];
+        const harness = createArticleSwitchHarness({
+            resetResponse: () => {
+                resetCalls += 1;
+                if (resetCalls === 1) {
+                    return {
+                        ok: false,
+                        status: 409,
+                        json: async () => ({
+                            code: "RESET_REQUIRES_DELETE_CONFIRMATION",
+                            requires_delete_confirmation: true,
+                            message: "Article is not present in Git HEAD",
+                        }),
+                    };
+                }
+                return { ok: true, status: 200, json: async () => ({ status: "deleted", deleted: true, local_preview_sync: true }) };
+            },
+        });
+        globalThis.confirm = message => {
+            confirmMessages.push(message);
+            return true;
+        };
+        try {
+            await loadFile("posts/old.md");
+            await resetChanges();
+
+            assert.equal(resetCalls, 2);
+            assert.equal(getCurrentPath(), "");
+            assert.equal(confirmMessages.length, 2);
+            assert.match(confirmMessages[1], /新規記事です/);
+            const confirmedRequest = harness.calls.find(call => call.url.includes("/admin/api/article/reset") && call.options.body.includes("confirm_delete"));
+            assert.ok(confirmedRequest);
+            assert.deepEqual(JSON.parse(confirmedRequest.options.body), { path: "posts/old.md", confirm_delete: true });
+        } finally {
+            globalThis.confirm = previousConfirm;
+            harness.restore();
+        }
+    });
+
     function deferred() {
         let resolve;
         let reject;

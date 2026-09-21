@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,15 +15,30 @@ import (
 var ErrInvalidArticleResetPath = errors.New("invalid article reset path")
 
 type ArticleResetResult struct {
-	HeadExists bool
-	Deleted    bool
-	Revision   string
+	HeadExists                 bool
+	Deleted                    bool
+	RequiresDeleteConfirmation bool
+	Revision                   string
+}
+
+// ArticleHEADExistsForRuntime checks whether the requested article is a file
+// in the local Git HEAD without changing the working tree.
+func ArticleHEADExistsForRuntime(runtime config.SiteRuntime, articlePath string) (bool, error) {
+	_, fullPath, gitPath, err := articleResetPaths(runtime, articlePath)
+	if err != nil {
+		return false, err
+	}
+	if hasSymlinkComponent(runtime.RepoPath, fullPath) {
+		return false, fmt.Errorf("%w: symlink path is not allowed", ErrInvalidArticleResetPath)
+	}
+	_, exists, err := readArticleFromHEAD(runtime, gitPath)
+	return exists, err
 }
 
 // ResetArticleToHEADForRuntime restores only the requested article file from
 // the repository's local HEAD. The caller owns the repository operation lock
 // when this is combined with other production/preview mutations.
-func ResetArticleToHEADForRuntime(runtime config.SiteRuntime, articlePath string) (ArticleResetResult, error) {
+func ResetArticleToHEADForRuntime(runtime config.SiteRuntime, articlePath string, confirmDelete bool) (ArticleResetResult, error) {
 	normalizedPath, fullPath, gitPath, err := articleResetPaths(runtime, articlePath)
 	if err != nil {
 		return ArticleResetResult{}, err
@@ -37,6 +53,9 @@ func ResetArticleToHEADForRuntime(runtime config.SiteRuntime, articlePath string
 	}
 
 	if !headExists {
+		if !confirmDelete {
+			return ArticleResetResult{RequiresDeleteConfirmation: true}, nil
+		}
 		if info, statErr := os.Lstat(fullPath); statErr == nil {
 			if info.IsDir() {
 				return ArticleResetResult{}, fmt.Errorf("%w: article path is a directory", ErrInvalidArticleResetPath)
@@ -89,20 +108,24 @@ func readArticleFromHEAD(runtime config.SiteRuntime, gitPath string) ([]byte, bo
 		return nil, false, fmt.Errorf("resolve Git HEAD: %w", err)
 	}
 
-	objectName := "HEAD:" + gitPath
-	objectType := exec.CommandContext(ctx, "git", "cat-file", "-t", objectName)
-	objectType.Dir = runtime.RepoPath
-	typeOutput, err := objectType.Output()
+	listTree := exec.CommandContext(ctx, "git", "ls-tree", "-z", "HEAD", "--", gitPath)
+	listTree.Dir = runtime.RepoPath
+	treeOutput, err := listTree.Output()
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, false, fmt.Errorf("inspect Git HEAD article: %w", ctx.Err())
 		}
+		return nil, false, fmt.Errorf("inspect Git HEAD article: %w", err)
+	}
+	if len(bytes.Trim(treeOutput, "\x00\n\r")) == 0 {
 		return nil, false, nil
 	}
-	if strings.TrimSpace(string(typeOutput)) != "blob" {
+	fields := strings.Fields(string(bytes.TrimSuffix(treeOutput, []byte{0})))
+	if len(fields) < 3 || fields[1] != "blob" {
 		return nil, false, fmt.Errorf("Git HEAD article is not a file")
 	}
 
+	objectName := "HEAD:" + gitPath
 	show := exec.CommandContext(ctx, "git", "show", objectName)
 	show.Dir = runtime.RepoPath
 	content, err := show.Output()

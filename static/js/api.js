@@ -85,6 +85,7 @@ async function responseError(res, fallback) {
 	error.status = res.status;
 	error.code = data?.code || "";
 	error.currentRevision = data?.current_revision || "";
+	error.requiresDeleteConfirmation = data?.requires_delete_confirmation === true;
 	return error;
 }
 
@@ -177,8 +178,10 @@ export async function deleteArticle(path, baseRevision = "") {
 	return await res.json();
 }
 
-export async function resetArticle(path, siteID = currentSite) {
+export async function resetArticle(path, siteID = currentSite, confirmDelete = false) {
     await ensureCSRFToken();
+    const body = { path };
+    if (confirmDelete) body.confirm_delete = true;
     const res = await fetch(withSite('/admin/api/article/reset', siteID), {
         method: 'POST',
         headers: {
@@ -186,7 +189,7 @@ export async function resetArticle(path, siteID = currentSite) {
             ...siteHeaders(siteID),
             ...getCSRFHeaders()
         },
-        body: JSON.stringify({ path })
+        body: JSON.stringify(body)
     });
     if (!res.ok) throw await responseError(res, "Reset failed");
     return await res.json();

@@ -114,6 +114,11 @@ describe("site-scoped preview API contracts", () => {
         assert.ok(request);
         assert.equal(request.options.headers["X-CMS-Site"], "site-b");
         assert.deepEqual(JSON.parse(request.options.body), { path: "posts/article.md" });
+
+        await API.resetArticle("posts/new.md", "site-b", true);
+        const confirmedRequest = calls.find(call => call.url === "/admin/api/article/reset?site=site-b" && call.options.body.includes("confirm_delete"));
+        assert.ok(confirmedRequest);
+        assert.deepEqual(JSON.parse(confirmedRequest.options.body), { path: "posts/new.md", confirm_delete: true });
     });
 });
 

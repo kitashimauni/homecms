@@ -393,7 +393,8 @@ func ResetArticle(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Path string `json:"path"`
+		Path          string `json:"path"`
+		ConfirmDelete bool   `json:"confirm_delete"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		ErrorBadRequest(c, "Invalid JSON")
@@ -413,17 +414,47 @@ func ResetArticle(c *gin.Context) {
 	unlock := services.LockRepositoryOperation(runtime)
 	defer unlock()
 
-	if err := invalidateLocalPreviewArticleURL(runtime, normalizedPath); err != nil {
-		slog.Warn("Failed to prepare Local Live Preview metadata before article reset", "site", runtime.ID, "path", normalizedPath, "error", err)
-	}
-
-	result, err := services.ResetArticleToHEADForRuntime(runtime, normalizedPath)
+	headExists, err := services.ArticleHEADExistsForRuntime(runtime, normalizedPath)
 	if err != nil {
 		if errors.Is(err, services.ErrInvalidArticleResetPath) {
 			ErrorBadRequest(c, err.Error())
 		} else {
 			ErrorInternal(c, "Reset failed: "+err.Error())
 		}
+		return
+	}
+	if !headExists && !req.ConfirmDelete {
+		c.JSON(http.StatusConflict, gin.H{
+			"status":                       "error",
+			"code":                         "RESET_REQUIRES_DELETE_CONFIRMATION",
+			"message":                      "Article is not present in Git HEAD; confirmation is required to delete it",
+			"requires_delete_confirmation": true,
+		})
+		return
+	}
+
+	if err := invalidateLocalPreviewArticleURL(runtime, normalizedPath); err != nil {
+		slog.Warn("Failed to prepare Local Live Preview metadata before article reset", "site", runtime.ID, "path", normalizedPath, "error", err)
+	}
+
+	result, err := services.ResetArticleToHEADForRuntime(runtime, normalizedPath, req.ConfirmDelete)
+	if err != nil {
+		if errors.Is(err, services.ErrInvalidArticleResetPath) {
+			ErrorBadRequest(c, err.Error())
+		} else {
+			ErrorInternal(c, "Reset failed: "+err.Error())
+		}
+		return
+	}
+	if result.RequiresDeleteConfirmation {
+		// The preflight above normally handles this case. Keep the response
+		// fail-closed if HEAD changes between the two locked lookups.
+		c.JSON(http.StatusConflict, gin.H{
+			"status":                       "error",
+			"code":                         "RESET_REQUIRES_DELETE_CONFIRMATION",
+			"message":                      "Article is not present in Git HEAD; confirmation is required to delete it",
+			"requires_delete_confirmation": true,
+		})
 		return
 	}
 

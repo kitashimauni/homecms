@@ -131,3 +131,74 @@ func TestResetArticleRestoresHEADAndSynchronizesSelectedSite(t *testing.T) {
 		t.Fatalf("reset revision = %q, want %q", response.Revision, want)
 	}
 }
+
+func TestResetArticleRequiresExplicitConfirmationForNewArticle(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	restoreSiteScopeConfig(t)
+
+	repoPath := t.TempDir()
+	articlePath := filepath.Join(repoPath, "content", "posts", "existing.md")
+	newArticlePath := filepath.Join(repoPath, "content", "posts", "new.md")
+	if err := os.MkdirAll(filepath.Dir(articlePath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(articlePath, []byte("HEAD article\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runArticleResetGit(t, repoPath, "init")
+	runArticleResetGit(t, repoPath, "config", "user.email", "test@example.com")
+	runArticleResetGit(t, repoPath, "config", "user.name", "HomeCMS Test")
+	runArticleResetGit(t, repoPath, "add", "content/posts/existing.md")
+	runArticleResetGit(t, repoPath, "commit", "-m", "initial article")
+	if err := os.WriteFile(newArticlePath, []byte("new article\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	site := config.SiteConfig{ID: "default", RepoPath: repoPath, ContentDir: "content", StaticDir: "static", PublicDir: "public"}
+	config.DefaultSiteID = site.ID
+	config.Sites = []config.SiteConfig{site}
+	originalInvalidate := invalidateLocalPreviewArticleURL
+	originalSync := syncLocalPreviewContentResourceForMutation
+	invalidateLocalPreviewArticleURL = func(config.SiteRuntime, ...string) error { return nil }
+	syncLocalPreviewContentResourceForMutation = func(config.SiteRuntime, string, bool, bool) error { return nil }
+	t.Cleanup(func() {
+		invalidateLocalPreviewArticleURL = originalInvalidate
+		syncLocalPreviewContentResourceForMutation = originalSync
+	})
+
+	reset := func(confirmDelete bool) *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]interface{}{"path": "posts/new.md", "confirm_delete": confirmDelete})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/admin/api/article/reset?site=default", bytes.NewReader(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		ResetArticle(ctx)
+		return recorder
+	}
+
+	response := reset(false)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("unconfirmed reset status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(newArticlePath); err != nil {
+		t.Fatalf("new article changed before confirmation: %v", err)
+	}
+	var conflict map[string]interface{}
+	if err := json.Unmarshal(response.Body.Bytes(), &conflict); err != nil {
+		t.Fatal(err)
+	}
+	if conflict["code"] != "RESET_REQUIRES_DELETE_CONFIRMATION" || conflict["requires_delete_confirmation"] != true {
+		t.Fatalf("unconfirmed reset response = %#v", conflict)
+	}
+
+	response = reset(true)
+	if response.Code != http.StatusOK {
+		t.Fatalf("confirmed reset status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(newArticlePath); !os.IsNotExist(err) {
+		t.Fatalf("new article still exists after confirmation, stat error = %v", err)
+	}
+}

@@ -798,7 +798,19 @@ export async function resetChanges(refreshListCb = null) {
         if (API.getCurrentSite() !== siteIDToReset) {
             throw new Error("サイトが切り替わったためResetを中止しました");
         }
-        const response = await runArticleResetMutation(() => API.resetArticle(pathToReset, siteIDToReset));
+        let response;
+        try {
+            response = await runArticleResetMutation(() => API.resetArticle(pathToReset, siteIDToReset));
+        } catch (error) {
+            if (!error?.requiresDeleteConfirmation) throw error;
+            if (API.getCurrentSite() !== siteIDToReset) {
+                throw new Error("サイトが切り替わったためResetを中止しました");
+            }
+            if (!confirm("この記事はGit HEADに存在しない新規記事です。Resetすると記事Markdownを削除します。Article Mediaは削除されません。続行しますか？")) {
+                return;
+            }
+            response = await runArticleResetMutation(() => API.resetArticle(pathToReset, siteIDToReset, true));
+        }
         resetCompleted = true;
         if (API.getCurrentSite() !== siteIDToReset) {
             return;
