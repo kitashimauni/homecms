@@ -98,6 +98,28 @@ describe("site-scoped preview API contracts", () => {
         ]);
         requestCalls.forEach(call => assert.equal(call.options.headers["X-CMS-Site"], "site-b"));
     });
+
+    it("pins article Reset to its explicit site", async () => {
+        const calls = [];
+        globalThis.fetch = async (url, options = {}) => {
+            calls.push({ url, options });
+            if (url === "/admin/api/csrf-token") return { ok: true, status: 200, json: async () => ({ csrf_token: "csrf" }) };
+            return { ok: true, status: 200, json: async () => ({ status: "restored" }) };
+        };
+
+        API.setCurrentSite("site-a");
+        await API.resetArticle("posts/article.md", "site-b");
+
+        const request = calls.find(call => call.url === "/admin/api/article/reset?site=site-b");
+        assert.ok(request);
+        assert.equal(request.options.headers["X-CMS-Site"], "site-b");
+        assert.deepEqual(JSON.parse(request.options.body), { path: "posts/article.md" });
+
+        await API.resetArticle("posts/new.md", "site-b", true);
+        const confirmedRequest = calls.find(call => call.url === "/admin/api/article/reset?site=site-b" && call.options.body.includes("confirm_delete"));
+        assert.ok(confirmedRequest);
+        assert.deepEqual(JSON.parse(confirmedRequest.options.body), { path: "posts/new.md", confirm_delete: true });
+    });
 });
 
 describe("media API contracts", () => {

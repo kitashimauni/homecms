@@ -17,6 +17,7 @@ let localPreviewRevision = 0;
 let articleLoadGeneration = 0;
 let articleLoadController = null;
 let gitSyncInProgress = false;
+let articleResetInProgress = false;
 let articleRevisionConflictPath = "";
 let articlePathChangeListener = null;
 const localPreviewInflight = new Set();
@@ -24,6 +25,7 @@ const localPreviewInflight = new Set();
 const PREVIEW_DEBOUNCE_MS = 180;
 const LOCAL_PREVIEW_DEBOUNCE_MS = 250;
 const GIT_SYNC_WRITE_PAUSED_MESSAGE = "Git Sync is in progress";
+const ARTICLE_RESET_WRITE_PAUSED_MESSAGE = "Article reset is in progress";
 const ARTICLE_REVISION_CONFLICT_MESSAGE = "この記事は別tabまたは外部で更新されました。ResetまたはDiffで確認してください。";
 const gitMutationInflight = new Set();
 
@@ -54,10 +56,33 @@ function assertGitSyncWritesAllowed() {
     }
 }
 
-export async function runGitMutation(operation) {
+function assertEditorMutationAllowed() {
     assertGitSyncWritesAllowed();
+    if (articleResetInProgress) {
+        throw new Error(ARTICLE_RESET_WRITE_PAUSED_MESSAGE);
+    }
+}
+
+export async function runGitMutation(operation) {
+    assertEditorMutationAllowed();
     const mutation = Promise.resolve().then(() => {
-        assertGitSyncWritesAllowed();
+        assertEditorMutationAllowed();
+        return operation();
+    });
+    gitMutationInflight.add(mutation);
+    mutation.then(
+        () => gitMutationInflight.delete(mutation),
+        () => gitMutationInflight.delete(mutation),
+    );
+    return mutation;
+}
+
+async function runArticleResetMutation(operation) {
+    if (gitSyncInProgress) {
+        throw new Error(GIT_SYNC_WRITE_PAUSED_MESSAGE);
+    }
+    const mutation = Promise.resolve().then(() => {
+        if (gitSyncInProgress) throw new Error(GIT_SYNC_WRITE_PAUSED_MESSAGE);
         return operation();
     });
     gitMutationInflight.add(mutation);
@@ -192,7 +217,7 @@ export function clearEditor() {
         fmContainer.innerHTML = "";
         fmContainer.style.display = 'none';
     }
-    setEditorWritePaused(gitSyncInProgress);
+    setEditorWritePaused(gitSyncInProgress || articleResetInProgress);
 
     UI.clearMarkdownPreview();
 }
@@ -209,7 +234,7 @@ export function initAutoSave() {
 }
 
 function handleEditorChange() {
-    if (gitSyncInProgress) return;
+    if (gitSyncInProgress || articleResetInProgress) return;
     if (currentData && typeof currentData.raw_content === 'string') {
         currentData.raw_content = '';
     }
@@ -220,7 +245,7 @@ function handleEditorChange() {
 }
 
 function triggerAutoSave() {
-    if (gitSyncInProgress || !currentPath) return;
+    if (gitSyncInProgress || articleResetInProgress || !currentPath) return;
     if (currentPath === deletingPath) return;
     if (articleRevisionConflictPath === currentPath) return;
     clearAutoSaveTimer();
@@ -286,7 +311,7 @@ function cancelMarkdownPreview() {
 }
 
 function scheduleMarkdownPreview() {
-    if (gitSyncInProgress || !currentPath || currentPath === deletingPath) return;
+    if (gitSyncInProgress || articleResetInProgress || !currentPath || currentPath === deletingPath) return;
     if (previewTimer) clearTimeout(previewTimer);
     previewTimer = setTimeout(() => {
         previewTimer = null;
@@ -294,8 +319,13 @@ function scheduleMarkdownPreview() {
     }, PREVIEW_DEBOUNCE_MS);
 }
 
-export async function refreshMarkdownPreview({ allowDuringGitSync = false } = {}) {
-    if ((gitSyncInProgress && !allowDuringGitSync) || !currentPath || currentPath === deletingPath) {
+export async function refreshMarkdownPreview({ allowDuringGitSync = false, allowDuringArticleReset = false } = {}) {
+    if (
+        (gitSyncInProgress && !allowDuringGitSync) ||
+        (articleResetInProgress && !allowDuringArticleReset) ||
+        !currentPath ||
+        currentPath === deletingPath
+    ) {
         UI.clearMarkdownPreview();
         return;
     }
@@ -341,7 +371,7 @@ function resetLocalPreviewClientState() {
 }
 
 function scheduleLocalLivePreview() {
-    if (gitSyncInProgress || !localPreviewEnabled() || !currentPath || currentPath === deletingPath) return;
+    if (gitSyncInProgress || articleResetInProgress || !localPreviewEnabled() || !currentPath || currentPath === deletingPath) return;
     if (localPreviewTimer) clearTimeout(localPreviewTimer);
     localPreviewTimer = setTimeout(() => {
         localPreviewTimer = null;
@@ -349,8 +379,14 @@ function scheduleLocalLivePreview() {
     }, LOCAL_PREVIEW_DEBOUNCE_MS);
 }
 
-export async function refreshLocalLivePreview() {
-    if (gitSyncInProgress || !localPreviewEnabled() || !currentPath || currentPath === deletingPath) return null;
+export async function refreshLocalLivePreview({ allowDuringArticleReset = false } = {}) {
+    if (
+        gitSyncInProgress ||
+        (articleResetInProgress && !allowDuringArticleReset) ||
+        !localPreviewEnabled() ||
+        !currentPath ||
+        currentPath === deletingPath
+    ) return null;
     cancelLocalPreviewTimer();
 
     const requestPath = currentPath;
@@ -399,6 +435,9 @@ export async function prepareLocalLivePreviewStop() {
 // source before it starts so an old autosave or preview request cannot race
 // the pull and recreate the pre-sync state afterwards.
 export async function prepareForGitSync() {
+    if (articleResetInProgress) {
+        throw new Error(ARTICLE_RESET_WRITE_PAUSED_MESSAGE);
+    }
     if (gitSyncInProgress) return;
     gitSyncInProgress = true;
     setEditorWritePaused(true);
@@ -415,7 +454,7 @@ export async function prepareForGitSync() {
 
 export function finishForGitSync() {
     gitSyncInProgress = false;
-    setEditorWritePaused(false);
+    setEditorWritePaused(articleResetInProgress);
 }
 
 export function isGitSyncInProgress() {
@@ -432,14 +471,14 @@ export async function flushLocalPreviewBeforeArticleSwitch(flush = refreshLocalL
 }
 
 export async function execAutoSave() {
-    if (gitSyncInProgress) return false;
+    if (gitSyncInProgress || articleResetInProgress) return false;
     if (articleRevisionConflictPath === currentPath) return false;
     return queueCurrentSave("Auto Saving...");
 }
 
 async function queueCurrentSave(statusMessage) {
     while (currentPath && currentPath !== deletingPath) {
-        assertGitSyncWritesAllowed();
+        assertEditorMutationAllowed();
         // Another payload may become the saved value while we wait. Read the
         // editor again afterwards so preview/publish always uses what is
         // currently visible, including a revert to an older payload.
@@ -494,7 +533,7 @@ async function queueCurrentSave(statusMessage) {
 }
 
 export async function flushPendingSave() {
-    assertGitSyncWritesAllowed();
+    assertEditorMutationAllowed();
     clearAutoSaveTimer();
     if (currentPath && currentPath === deletingPath) {
         throw new Error("Article deletion is in progress");
@@ -502,8 +541,8 @@ export async function flushPendingSave() {
     await queueCurrentSave("Saving before publish...");
 }
 
-export async function loadFile(path, { allowDuringGitSync = false } = {}) {
-    if (gitSyncInProgress && !allowDuringGitSync) return;
+export async function loadFile(path, { allowDuringGitSync = false, allowDuringArticleReset = false } = {}) {
+    if ((gitSyncInProgress && !allowDuringGitSync) || (articleResetInProgress && !allowDuringArticleReset)) return;
     const request = beginArticleLoad();
     setEditorWritePaused(true);
     const activePathAtStart = currentPath;
@@ -552,11 +591,11 @@ export async function loadFile(path, { allowDuringGitSync = false } = {}) {
         const display = document.getElementById('filename-display');
         if (display) display.textContent = path;
         UI.updateEditorContent(data, path, cmsConfig);
-        setEditorWritePaused(gitSyncInProgress);
+        setEditorWritePaused(gitSyncInProgress || articleResetInProgress);
 
         lastSavedPayload = serializePayload(getPayload());
         lastQueuedPayload = "";
-        await refreshMarkdownPreview({ allowDuringGitSync });
+        await refreshMarkdownPreview({ allowDuringGitSync, allowDuringArticleReset });
 
     } catch (e) {
         if (!isCurrentArticleLoad(request) || e?.name === 'AbortError') return;
@@ -567,7 +606,7 @@ export async function loadFile(path, { allowDuringGitSync = false } = {}) {
             UI.showToast("Failed to load file: " + e.message, "error");
         }
     } finally {
-        if (isCurrentArticleLoad(request)) setEditorWritePaused(gitSyncInProgress);
+        if (isCurrentArticleLoad(request)) setEditorWritePaused(gitSyncInProgress || articleResetInProgress);
         finishArticleLoad(request);
     }
 }
@@ -599,6 +638,9 @@ export async function saveFile() {
     if (gitSyncInProgress) {
         return UI.showToast(GIT_SYNC_WRITE_PAUSED_MESSAGE, "warning");
     }
+    if (articleResetInProgress) {
+        return UI.showToast(ARTICLE_RESET_WRITE_PAUSED_MESSAGE, "warning");
+    }
     if (!currentPath) return UI.showToast("No file selected", "warning");
     if (currentPath === deletingPath) {
         return UI.showToast("Article deletion is in progress", "warning");
@@ -623,6 +665,9 @@ export async function deleteFile(refreshListCb) {
     if (gitSyncInProgress) {
         return UI.showToast(GIT_SYNC_WRITE_PAUSED_MESSAGE, "warning");
     }
+    if (articleResetInProgress) {
+        return UI.showToast(ARTICLE_RESET_WRITE_PAUSED_MESSAGE, "warning");
+    }
     if (!currentPath) return UI.showToast("No file selected", "warning");
     if (currentPath === deletingPath) {
         return UI.showToast("Article deletion is already in progress", "warning");
@@ -645,7 +690,7 @@ export async function deleteFile(refreshListCb) {
         // shadow files, otherwise a late update could recreate the deleted
         // article in the resident workspace.
         await waitForLocalPreviewUpdates();
-        assertGitSyncWritesAllowed();
+        assertEditorMutationAllowed();
         const deleteResponse = await runGitMutation(() => API.deleteArticle(pathToDelete, currentData?.revision || ""));
         // Production deletion is committed at this point. The server removes
         // the corresponding file from the site-scoped preview workspace while
@@ -693,6 +738,9 @@ export async function createNewFile(refreshListCb) {
     if (gitSyncInProgress) {
         return UI.showToast(GIT_SYNC_WRITE_PAUSED_MESSAGE, "warning");
     }
+    if (articleResetInProgress) {
+        return UI.showToast(ARTICLE_RESET_WRITE_PAUSED_MESSAGE, "warning");
+    }
     if (!cmsConfig) {
         UI.showToast("Config not loaded", "error");
         return;
@@ -700,7 +748,7 @@ export async function createNewFile(refreshListCb) {
 
     UI.showCreationModal(cmsConfig, async (colName, fields) => {
         try {
-            assertGitSyncWritesAllowed();
+            assertEditorMutationAllowed();
             const res = await runGitMutation(() => API.createArticle({
                 collection: colName,
                 fields: fields
@@ -720,16 +768,80 @@ export async function createNewFile(refreshListCb) {
     });
 }
 
-export async function resetChanges() {
+export async function resetChanges(refreshListCb = null) {
     if (!currentPath) return;
-    if (!confirm("Are you sure you want to discard all changes?")) return;
-    await loadFile(currentPath);
-    await refreshLocalLivePreview();
-    UI.showToast("Changes discarded", "info");
+    if (gitSyncInProgress) {
+        return UI.showToast(GIT_SYNC_WRITE_PAUSED_MESSAGE, "warning");
+    }
+    if (articleResetInProgress) {
+        return UI.showToast(ARTICLE_RESET_WRITE_PAUSED_MESSAGE, "warning");
+    }
+    if (!confirm("この記事の未Publish変更を破棄して、Git HEADの状態へ戻します。\nこの操作は元に戻せません。")) return;
+
+    const pathToReset = currentPath;
+    const siteIDToReset = API.getCurrentSite();
+    let resetCompleted = false;
+    articleResetInProgress = true;
+    setEditorWritePaused(true);
+    clearAutoSaveTimer();
+    cancelMarkdownPreview();
+    cancelLocalPreviewTimer();
+
+    try {
+        await saveQueue.catch(() => undefined);
+        await waitForLocalPreviewUpdates();
+        while (gitMutationInflight.size > 0) {
+            await Promise.allSettled(Array.from(gitMutationInflight));
+        }
+        if (gitSyncInProgress) throw new Error(GIT_SYNC_WRITE_PAUSED_MESSAGE);
+
+        if (API.getCurrentSite() !== siteIDToReset) {
+            throw new Error("サイトが切り替わったためResetを中止しました");
+        }
+        let response;
+        try {
+            response = await runArticleResetMutation(() => API.resetArticle(pathToReset, siteIDToReset));
+        } catch (error) {
+            if (!error?.requiresDeleteConfirmation) throw error;
+            if (API.getCurrentSite() !== siteIDToReset) {
+                throw new Error("サイトが切り替わったためResetを中止しました");
+            }
+            if (!confirm("この記事はGit HEADに存在しない新規記事です。Resetすると記事Markdownを削除します。Article Mediaは削除されません。続行しますか？")) {
+                return;
+            }
+            response = await runArticleResetMutation(() => API.resetArticle(pathToReset, siteIDToReset, true));
+        }
+        resetCompleted = true;
+        if (API.getCurrentSite() !== siteIDToReset) {
+            return;
+        }
+        if (window.markDeploymentPreviewStale) window.markDeploymentPreviewStale();
+
+        if (response?.deleted === true || response?.status === "deleted") {
+            clearEditor();
+        } else {
+            await loadFile(pathToReset, { allowDuringArticleReset: true });
+            if (currentPath === pathToReset) {
+                await refreshLocalLivePreview({ allowDuringArticleReset: true });
+            }
+        }
+
+        if (refreshListCb) await refreshListCb();
+        if (response?.local_preview_sync === false) {
+            UI.showToast("Reset completed, but Local Live Preview sync failed", "warning");
+        } else {
+            UI.showToast("Changes discarded", "info");
+        }
+    } catch (e) {
+        UI.showToast(resetCompleted ? "Reset completed, but refreshing the editor failed: " + e.message : "Reset failed: " + e.message, "error");
+    } finally {
+        articleResetInProgress = false;
+        setEditorWritePaused(gitSyncInProgress);
+    }
 }
 
 export function insertText(text) {
-    if (gitSyncInProgress) return;
+    if (gitSyncInProgress || articleResetInProgress) return;
     const editor = document.getElementById('editor');
     if (!editor) return;
 

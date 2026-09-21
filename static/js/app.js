@@ -176,7 +176,7 @@ async function init() {
             UI.showToast("Failed to load snippets: " + e.message, "error");
         }
     };
-    window.resetChanges = Editor.resetChanges;
+    window.resetChanges = () => Editor.resetChanges(refreshFileList);
     window.showDiff = Editor.showDiff;
 
     window.runSync = runSync;
