@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"errors"
 	"hugo-cms/pkg/config"
 	"hugo-cms/pkg/services"
 	"net/http"
@@ -8,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +67,44 @@ func TestHandleDeploymentErrorReturnsConflictForPublishInvariantFailures(t *test
 		if recorder.Code != http.StatusConflict {
 			t.Fatalf("error %v status = %d, want 409", err, recorder.Code)
 		}
+	}
+}
+
+func TestHandlePublishErrorClassifiesSafeFailureReasons(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name       string
+		err        error
+		statusCode int
+		code       string
+		message    string
+	}{
+		{name: "stale preview", err: services.ErrDraftPreviewStale, statusCode: http.StatusConflict, code: publishPreviewStaleCode, message: "stale"},
+		{name: "branch moved", err: services.ErrDraftPreviewBranchMoved, statusCode: http.StatusConflict, code: publishBranchMovedCode, message: "branch"},
+		{name: "git push", err: errors.New("push draft branch: remote rejected secret details"), statusCode: http.StatusBadGateway, code: publishGitPushCode, message: "branch push"},
+		{name: "pull request", err: errors.New("GitHub API returned HTTP 500 with token details"), statusCode: http.StatusBadGateway, code: publishPullRequestCode, message: "pull request"},
+		{name: "token", err: errors.New("GitHub token is required"), statusCode: http.StatusUnauthorized, code: ErrCodeUnauthorized, message: "session token"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			handleDeploymentError(context, "publish", test.err)
+
+			if recorder.Code != test.statusCode {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, test.statusCode, recorder.Body.String())
+			}
+			var response APIError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != test.code || !strings.Contains(strings.ToLower(response.Message), test.message) {
+				t.Fatalf("response = %#v, want code %q and message containing %q", response, test.code, test.message)
+			}
+			if strings.Contains(strings.ToLower(response.Message), "secret") || strings.Contains(strings.ToLower(response.Message), "token details") {
+				t.Fatalf("response leaked internal details: %#v", response)
+			}
+		})
 	}
 }
 

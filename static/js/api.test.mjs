@@ -42,6 +42,35 @@ describe("site-scoped preview API contracts", () => {
         );
     });
 
+    it("preserves Publish status, safe message, and code from the backend", async () => {
+        globalThis.fetch = async () => ({
+            ok: false,
+            status: 409,
+            json: async () => ({
+                code: "PUBLISH_PREVIEW_STALE",
+                message: "The deployment preview is stale; update it or use direct Publish",
+            }),
+        });
+
+        await assert.rejects(
+            API.runPublish("posts/article.md", "draft-1", "site-a", "direct"),
+            error => error.status === 409 &&
+                error.code === "PUBLISH_PREVIEW_STALE" &&
+                error.message.includes("stale") &&
+                !error.message.includes("token"),
+        );
+
+        globalThis.fetch = async () => ({
+            ok: false,
+            status: 500,
+            json: async () => ({ code: "PUBLISH_GIT_PUSH_FAILED", message: "GitHub rejected the Publish branch push" }),
+        });
+        await assert.rejects(
+            API.runPublish("posts/article.md", "draft-1", "site-a", "direct"),
+            error => error.status === 500 && error.code === "PUBLISH_GIT_PUSH_FAILED" && error.message.includes("branch push"),
+        );
+    });
+
     it("pins Git Sync to its explicit site", async () => {
         const calls = [];
         globalThis.fetch = async (url, options = {}) => {

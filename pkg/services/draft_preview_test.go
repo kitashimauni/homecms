@@ -219,7 +219,11 @@ func TestPublishDraftPreviewRejectsDifferentArticleAndMovedRemoteBranch(t *testi
 
 func TestPublishArticleCreatesPRWithoutDeploymentPreview(t *testing.T) {
 	runtime, remotePath := setupDraftPreviewRepository(t)
-	writeDraftTestFile(t, filepath.Join(runtime.RepoPath, "content", "selected.md"), "published directly\n")
+	selectedPath := filepath.Join(runtime.RepoPath, "content", "selected.md")
+	writeDraftTestFile(t, selectedPath, "---\ndraft: true\ntitle: Published directly\n---\npublished directly\n")
+	runGitForDraftTest(t, runtime.RepoPath, "add", "content/selected.md")
+	runGitForDraftTest(t, runtime.RepoPath, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "mark article as draft")
+	writeDraftTestFile(t, selectedPath, "---\ndraft: false\ntitle: Published directly\n---\npublished directly\n")
 
 	remoteHead := func(_ context.Context, _ config.SiteRuntime, _ string, branch string) (string, error) {
 		return strings.TrimSpace(runGitOutputForDraftTest(t, remotePath, "rev-parse", "refs/heads/"+branch)), nil
@@ -242,6 +246,10 @@ func TestPublishArticleCreatesPRWithoutDeploymentPreview(t *testing.T) {
 	}
 	if publishedState.ArticlePath != "selected.md" || publishedState.Paths[0] != "content/selected.md" {
 		t.Fatalf("published paths = %#v", publishedState)
+	}
+	publishedContent := runGitOutputForDraftTest(t, remotePath, "show", publishedState.CommitSHA+":content/selected.md")
+	if !strings.Contains(publishedContent, "draft: false") || !strings.Contains(publishedContent, "published directly") {
+		t.Fatalf("direct Publish did not use the working tree draft value: %q", publishedContent)
 	}
 }
 
