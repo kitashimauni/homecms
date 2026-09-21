@@ -378,16 +378,22 @@ func commitAndPushDraftPreview(ctx context.Context, runtime config.SiteRuntime, 
 	if _, err := runGitCommand(ctx, runtime.RepoPath, nil, updateArgs...); err != nil {
 		return "", "", fmt.Errorf("update local draft branch: %w", err)
 	}
-	lease := "--force-with-lease=" + ref + ":" + previousCommit
+	// The remote branch is the source of truth for the lease. A local ref can
+	// survive a merged PR after GitHub has deleted the remote branch.
+	remoteCommit, remoteBranchExists, err := remoteDraftBranchLease(ctx, runtime, token, branch)
+	if err != nil {
+		if rollbackErr := rollbackLocalDraftRef(ctx, runtime, ref, localBranchExists, previousCommit, commitSHA); rollbackErr != nil {
+			return "", "", fmt.Errorf("%w; rollback local draft ref: %v", err, rollbackErr)
+		}
+		return "", "", err
+	}
+	lease := "--force-with-lease=" + ref + ":"
+	if remoteBranchExists {
+		lease += remoteCommit
+	}
 	pushLog, err := push(runtime.RepoPath, token, "push", lease, runtime.GitRemote, ref+":"+ref)
 	if err != nil {
-		rollbackArgs := []string{"update-ref"}
-		if localBranchExists {
-			rollbackArgs = append(rollbackArgs, ref, previousCommit, commitSHA)
-		} else {
-			rollbackArgs = append(rollbackArgs, "-d", ref, commitSHA)
-		}
-		if _, rollbackErr := runGitCommand(ctx, runtime.RepoPath, nil, rollbackArgs...); rollbackErr != nil {
+		if rollbackErr := rollbackLocalDraftRef(ctx, runtime, ref, localBranchExists, previousCommit, commitSHA); rollbackErr != nil {
 			return "", "", fmt.Errorf("push draft branch: %w: %s; rollback local draft ref: %v", err, strings.TrimSpace(pushLog), rollbackErr)
 		}
 		return "", "", fmt.Errorf("push draft branch: %w: %s", err, strings.TrimSpace(pushLog))
@@ -664,23 +670,66 @@ func publishDraftPreview(ctx context.Context, runtime config.SiteRuntime, token,
 	return pullRequestURL, nil
 }
 
-func remoteDraftBranchCommit(_ context.Context, runtime config.SiteRuntime, token, branch string) (string, error) {
-	if err := validatePreviewBranch(branch); err != nil {
+func remoteDraftBranchCommit(ctx context.Context, runtime config.SiteRuntime, token, branch string) (string, error) {
+	commit, exists, err := remoteDraftBranchLease(ctx, runtime, token, branch)
+	if err != nil {
 		return "", err
 	}
-	ref := "refs/heads/" + branch
-	output, err := ExecuteGitWithTokenForRuntime(runtime, token, "ls-remote", "--refs", runtime.GitRemote, ref)
-	if err != nil {
-		return "", fmt.Errorf("read remote draft branch: %w", err)
-	}
-	fields := strings.Fields(output)
-	if len(fields) != 2 || fields[1] != ref {
+	if !exists {
 		return "", ErrDraftPreviewBranchMoved
 	}
-	if err := validateCommitSHA(fields[0]); err != nil {
-		return "", fmt.Errorf("remote draft branch returned invalid commit: %w", err)
+	return commit, nil
+}
+
+func remoteDraftBranchLease(ctx context.Context, runtime config.SiteRuntime, token, branch string) (string, bool, error) {
+	if err := validatePreviewBranch(branch); err != nil {
+		return "", false, err
 	}
-	return fields[0], nil
+	ref := "refs/heads/" + branch
+	remoteURL, err := readRawRemoteURL(ctx, runtime.RepoPath, runtime.GitRemote)
+	if err != nil {
+		return "", false, fmt.Errorf("read remote draft branch: %w", err)
+	}
+
+	var output string
+	if isLocalGitRemote(remoteURL) {
+		output, err = runGitCommand(ctx, runtime.RepoPath, nil, "ls-remote", "--refs", runtime.GitRemote, ref)
+	} else {
+		output, err = ExecuteGitWithTokenForRuntime(runtime, token, "ls-remote", "--refs", runtime.GitRemote, ref)
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read remote draft branch: %w", err)
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		return "", false, nil
+	}
+	if len(fields) != 2 || fields[1] != ref {
+		return "", false, fmt.Errorf("remote draft branch returned an invalid ref")
+	}
+	if err := validateCommitSHA(fields[0]); err != nil {
+		return "", false, fmt.Errorf("remote draft branch returned invalid commit: %w", err)
+	}
+	return fields[0], true, nil
+}
+
+func rollbackLocalDraftRef(ctx context.Context, runtime config.SiteRuntime, ref string, localBranchExists bool, previousCommit, commitSHA string) error {
+	rollbackArgs := []string{"update-ref"}
+	if localBranchExists {
+		rollbackArgs = append(rollbackArgs, ref, previousCommit, commitSHA)
+	} else {
+		rollbackArgs = append(rollbackArgs, "-d", ref, commitSHA)
+	}
+	_, err := runGitCommand(ctx, runtime.RepoPath, nil, rollbackArgs...)
+	return err
+}
+
+func isLocalGitRemote(remoteURL string) bool {
+	if filepath.IsAbs(remoteURL) || strings.HasPrefix(remoteURL, "./") || strings.HasPrefix(remoteURL, `..\`) || strings.HasPrefix(remoteURL, "../") {
+		return true
+	}
+	parsed, err := url.Parse(remoteURL)
+	return err == nil && strings.EqualFold(parsed.Scheme, "file")
 }
 
 func CleanupDraftPreview(ctx context.Context, runtime config.SiteRuntime, token, draftID string, store *DraftPreviewStore, provider PreviewDeploymentProvider) error {

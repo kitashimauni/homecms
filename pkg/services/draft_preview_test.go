@@ -119,10 +119,14 @@ func TestCommitAndPushDraftPreviewLeaseFailurePreservesRemoteAndRollsBackLocalRe
 		t.Fatal(err)
 	}
 	productionCommit := strings.TrimSpace(runGitOutputForDraftTest(t, runtime.RepoPath, "rev-parse", "refs/heads/main"))
-	runGitForDraftTest(t, remotePath, "update-ref", "refs/heads/cms-preview/draft-lease", productionCommit, firstCommit)
 	writeDraftTestFile(t, selectedPath, "draft version two\n")
 
-	if _, _, err := commitAndPushDraftPreview(context.Background(), runtime, "token", "draft-lease", []string{"content/selected.md"}, localDraftPush(t, runtime)); err == nil {
+	push := func(directory, token string, args ...string) (string, error) {
+		// Simulate a third-party update after the lease lookup and before push.
+		runGitForDraftTest(t, remotePath, "update-ref", "refs/heads/cms-preview/draft-lease", productionCommit, firstCommit)
+		return localDraftPush(t, runtime)(directory, token, args...)
+	}
+	if _, _, err := commitAndPushDraftPreview(context.Background(), runtime, "token", "draft-lease", []string{"content/selected.md"}, push); err == nil {
 		t.Fatal("force-with-lease unexpectedly overwrote a moved remote branch")
 	}
 	if remoteCommit := strings.TrimSpace(runGitOutputForDraftTest(t, remotePath, "rev-parse", "refs/heads/cms-preview/draft-lease")); remoteCommit != productionCommit {
@@ -130,6 +134,74 @@ func TestCommitAndPushDraftPreviewLeaseFailurePreservesRemoteAndRollsBackLocalRe
 	}
 	if localCommit := strings.TrimSpace(runGitOutputForDraftTest(t, runtime.RepoPath, "rev-parse", "refs/heads/cms-preview/draft-lease")); localCommit != firstCommit {
 		t.Fatalf("local ref = %s, want rollback to %s", localCommit, firstCommit)
+	}
+}
+
+func TestCommitAndPushDraftPreviewRecreatesRemoteBranchAfterMergeDeletion(t *testing.T) {
+	runtime, remotePath := setupDraftPreviewRepository(t)
+	selectedPath := filepath.Join(runtime.RepoPath, "content", "selected.md")
+	writeDraftTestFile(t, selectedPath, "draft version one\n")
+	branch, firstCommit, err := commitAndPushDraftPreview(context.Background(), runtime, "token", "draft-recreate", []string{"content/selected.md"}, localDraftPush(t, runtime))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitForDraftTest(t, remotePath, "update-ref", "-d", "refs/heads/"+branch)
+	writeDraftTestFile(t, selectedPath, "draft version two\n")
+
+	_, secondCommit, err := commitAndPushDraftPreview(context.Background(), runtime, "token", "draft-recreate", []string{"content/selected.md"}, localDraftPush(t, runtime))
+	if err != nil {
+		t.Fatalf("recreate deleted remote branch: %v", err)
+	}
+	if secondCommit == firstCommit {
+		t.Fatal("recreated branch did not receive a new commit")
+	}
+	if remoteCommit := strings.TrimSpace(runGitOutputForDraftTest(t, remotePath, "rev-parse", "refs/heads/"+branch)); remoteCommit != secondCommit {
+		t.Fatalf("remote commit = %s, want %s", remoteCommit, secondCommit)
+	}
+}
+
+func TestCommitAndPushDraftPreviewUsesRemoteLeaseWhenLocalRefIsMissing(t *testing.T) {
+	runtime, remotePath := setupDraftPreviewRepository(t)
+	selectedPath := filepath.Join(runtime.RepoPath, "content", "selected.md")
+	writeDraftTestFile(t, selectedPath, "draft version one\n")
+	branch, firstCommit, err := commitAndPushDraftPreview(context.Background(), runtime, "token", "draft-remote-lease", []string{"content/selected.md"}, localDraftPush(t, runtime))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitForDraftTest(t, runtime.RepoPath, "update-ref", "-d", "refs/heads/"+branch)
+	writeDraftTestFile(t, selectedPath, "draft version two\n")
+
+	_, secondCommit, err := commitAndPushDraftPreview(context.Background(), runtime, "token", "draft-remote-lease", []string{"content/selected.md"}, localDraftPush(t, runtime))
+	if err != nil {
+		t.Fatalf("update with remote-only branch: %v", err)
+	}
+	if secondCommit == firstCommit {
+		t.Fatal("remote-only branch did not receive a new commit")
+	}
+	if remoteCommit := strings.TrimSpace(runGitOutputForDraftTest(t, remotePath, "rev-parse", "refs/heads/"+branch)); remoteCommit != secondCommit {
+		t.Fatalf("remote commit = %s, want %s", remoteCommit, secondCommit)
+	}
+}
+
+func TestCommitAndPushDraftPreviewFailsClosedWhenRemoteLookupFails(t *testing.T) {
+	runtime, _ := setupDraftPreviewRepository(t)
+	selectedPath := filepath.Join(runtime.RepoPath, "content", "selected.md")
+	writeDraftTestFile(t, selectedPath, "draft version one\n")
+	runtime.GitRemote = "missing"
+	pushCalled := false
+	push := func(string, string, ...string) (string, error) {
+		pushCalled = true
+		return "", nil
+	}
+
+	if _, _, err := commitAndPushDraftPreview(context.Background(), runtime, "token", "draft-lookup-failure", []string{"content/selected.md"}, push); err == nil {
+		t.Fatal("remote lookup failure unexpectedly allowed Publish")
+	}
+	if pushCalled {
+		t.Fatal("push was attempted after remote lookup failure")
+	}
+	if _, err := os.Stat(filepath.Join(runtime.RepoPath, ".git", "refs", "heads", "cms-preview", "draft-lookup-failure")); !os.IsNotExist(err) {
+		t.Fatalf("local draft ref was not rolled back: %v", err)
 	}
 }
 
