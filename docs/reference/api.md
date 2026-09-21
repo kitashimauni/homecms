@@ -455,13 +455,16 @@ Git Sync成功後は、対象siteのLocal Live Preview processとshadow workspac
 
 ### POST /admin/api/publish
 
-readyになったdraft branchからproduction branchへのPull Requestを作成します。production branchへ直接pushしません。requestの`path`はpreview stateへ保存されたarticle pathと一致する必要があり、異なる場合はHTTP 409を返します。working tree、remote branch、PR headがpreview済みcommitと一致しない場合もHTTP 409となり、デプロイプレビューの更新が必要です。
+`mode`に応じてPublishします。`preview`はreadyになったdraft branchからproduction branchへのPull Requestを作成し、production branchへ直接pushしません。`direct`は現在保存されているworking treeの内容をdraft branchへcommit・pushしてPull Requestを作成します。UIはpreviewがstaleまたはreadyでない場合にdirectを選択します。どちらのmodeでもproduction branchへは直接pushしません。
+
+`preview`ではrequestの`path`がpreview stateへ保存されたarticle pathと一致する必要があります。異なる場合や、working tree・remote branch・PR headがpreview済みcommitと一致しない場合はHTTP 409を返します。`direct`ではPublish開始前にUIが保留中の保存を完了し、現在のworking treeを対象にします。
 
 **リクエストボディ**:
 ```json
 {
     "path": "posts/2026-01-10-hello/index.md",
-    "draft_id": "550e8400-e29b-41d4-a716-446655440000"
+    "draft_id": "550e8400-e29b-41d4-a716-446655440000",
+    "mode": "direct"
 }
 ```
 
@@ -472,6 +475,14 @@ readyになったdraft branchからproduction branchへのPull Requestを作成�
     "url": "https://github.com/owner/repository/pull/123"
 }
 ```
+
+Publish失敗時は、レスポンスに安全な`code`、利用者向け`message`、HTTPステータスが含まれます。認証情報、アクセストークン、GitHub APIのレスポンス本文は返しません。代表的な分類は次のとおりです。
+
+- `409`: `PUBLISH_ARTICLE_MISMATCH`、`PUBLISH_PREVIEW_NOT_READY`、`PUBLISH_PREVIEW_STALE`、`PUBLISH_BRANCH_MOVED`、`PUBLISH_STATE_FAILED`
+- `502`: `PUBLISH_GIT_PUSH_FAILED`、`PUBLISH_BRANCH_CHECK_FAILED`、`PUBLISH_PULL_REQUEST_FAILED`、`PUBLISH_PROVIDER_FAILED`
+- `401`: `UNAUTHORIZED`（GitHubセッションまたはトークンの問題）
+- `400`: `PUBLISH_PROVIDER_FAILED`（providerがリクエストを拒否）
+- `500`: `PUBLISH_FAILED`（その他のサーバー内部エラー）
 
 ---
 

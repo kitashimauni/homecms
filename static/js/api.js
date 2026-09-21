@@ -231,7 +231,7 @@ export async function runPublish(path, draftID, siteID = currentSite, mode = 'pr
         },
         body: JSON.stringify({ path, draft_id: draftID, mode })
     });
-    if (!res.ok) throw new Error("Publish failed");
+    if (!res.ok) throw await responseError(res, "Publish failed");
     return await res.json();
 }
 

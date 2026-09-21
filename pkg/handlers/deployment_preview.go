@@ -228,6 +228,10 @@ func deploymentDraftPaths(runtime config.SiteRuntime, articlePath string) ([]str
 }
 
 func handleDeploymentError(c *gin.Context, operation string, err error) {
+	if operation == "publish" {
+		handlePublishError(c, err)
+		return
+	}
 	if errors.Is(err, services.ErrDraftPreviewArticleMismatch) ||
 		errors.Is(err, services.ErrDraftPreviewNotReady) ||
 		errors.Is(err, services.ErrDraftPreviewStale) ||
@@ -245,6 +249,58 @@ func handleDeploymentError(c *gin.Context, operation string, err error) {
 	}
 	slog.Error("Deployment preview operation failed", "operation", operation, "error", err)
 	ErrorInternal(c, "Deployment preview operation failed")
+}
+
+const (
+	publishArticleMismatchCode = "PUBLISH_ARTICLE_MISMATCH"
+	publishPreviewNotReadyCode = "PUBLISH_PREVIEW_NOT_READY"
+	publishPreviewStaleCode    = "PUBLISH_PREVIEW_STALE"
+	publishBranchMovedCode     = "PUBLISH_BRANCH_MOVED"
+	publishGitPushCode         = "PUBLISH_GIT_PUSH_FAILED"
+	publishBranchCheckCode     = "PUBLISH_BRANCH_CHECK_FAILED"
+	publishPullRequestCode     = "PUBLISH_PULL_REQUEST_FAILED"
+	publishProviderCode        = "PUBLISH_PROVIDER_FAILED"
+	publishStateCode           = "PUBLISH_STATE_FAILED"
+	publishFailedCode          = "PUBLISH_FAILED"
+)
+
+func handlePublishError(c *gin.Context, err error) {
+	errorMessage := strings.ToLower(err.Error())
+
+	switch {
+	case errors.Is(err, services.ErrDraftPreviewArticleMismatch):
+		RespondError(c, http.StatusConflict, publishArticleMismatchCode, "The deployment preview article does not match the selected article")
+	case errors.Is(err, services.ErrDraftPreviewNotReady):
+		RespondError(c, http.StatusConflict, publishPreviewNotReadyCode, "The deployment preview is not ready for Publish")
+	case errors.Is(err, services.ErrDraftPreviewStale):
+		RespondError(c, http.StatusConflict, publishPreviewStaleCode, "The deployment preview is stale; update it or use direct Publish")
+	case errors.Is(err, services.ErrDraftPreviewBranchMoved):
+		RespondError(c, http.StatusConflict, publishBranchMovedCode, "The Publish branch changed while it was being verified")
+	case services.IsPreviewProviderError(err, services.PreviewProviderInvalidInput):
+		RespondError(c, http.StatusBadRequest, publishProviderCode, "The deployment preview provider rejected the Publish request")
+	case services.IsPreviewProviderError(err, services.PreviewProviderUnauthorized),
+		services.IsPreviewProviderError(err, services.PreviewProviderForbidden):
+		RespondError(c, http.StatusBadGateway, publishProviderCode, "The deployment preview provider authentication failed")
+	case services.IsPreviewProviderError(err, services.PreviewProviderConflict),
+		services.IsPreviewProviderError(err, services.PreviewProviderRateLimited),
+		services.IsPreviewProviderError(err, services.PreviewProviderUnavailable),
+		services.IsPreviewProviderError(err, services.PreviewProviderNotFound),
+		services.IsPreviewProviderError(err, services.PreviewProviderInvalidReply):
+		RespondError(c, http.StatusBadGateway, publishProviderCode, "The deployment preview provider could not complete Publish")
+	case strings.Contains(errorMessage, "github token is required"):
+		RespondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "The GitHub session token is missing or expired")
+	case strings.Contains(errorMessage, "push draft branch"):
+		RespondError(c, http.StatusBadGateway, publishGitPushCode, "GitHub rejected the Publish branch push")
+	case strings.Contains(errorMessage, "read remote draft branch"):
+		RespondError(c, http.StatusBadGateway, publishBranchCheckCode, "The Publish branch could not be verified on GitHub")
+	case strings.Contains(errorMessage, "github") || strings.Contains(errorMessage, "pull request"):
+		RespondError(c, http.StatusBadGateway, publishPullRequestCode, "The GitHub pull request could not be created or verified")
+	case strings.Contains(errorMessage, "draft") || strings.Contains(errorMessage, "state"):
+		RespondError(c, http.StatusConflict, publishStateCode, "The Publish state is inconsistent; refresh the article and try again")
+	default:
+		slog.Error("Publish operation failed", "error", err)
+		RespondError(c, http.StatusInternalServerError, publishFailedCode, "Publish failed due to an internal server error")
+	}
 }
 
 func deploymentStateResponse(runtime config.SiteRuntime, state services.DraftPreviewState) gin.H {

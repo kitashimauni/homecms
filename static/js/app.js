@@ -1171,7 +1171,11 @@ async function runPublish(path, draftID) {
         }
     } catch (e) {
         if (!isCurrent()) return;
-        UI.showToast("Publish cancelled: " + e.message, "error");
+        const details = [
+            e?.status ? `HTTP ${e.status}` : "",
+            e?.code || "",
+        ].filter(Boolean).join(" ");
+        UI.showToast(`Publish failed${details ? ` (${details})` : ""}: ${e.message}`, "error");
     } finally {
         publishInProgress = false;
         if (btn) {
