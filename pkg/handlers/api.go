@@ -386,6 +386,66 @@ func GetDiff(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"diff": diffStr, "type": diffType})
 }
 
+func ResetArticle(c *gin.Context) {
+	runtime, err := requestedRuntime(c)
+	if err != nil {
+		ErrorBadRequest(c, err.Error())
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		ErrorBadRequest(c, "Invalid JSON")
+		return
+	}
+
+	if req.Path == "" {
+		ErrorBadRequest(c, "Path is required")
+		return
+	}
+	normalizedPath := filepath.ToSlash(filepath.Clean(req.Path))
+	if services.SafeJoin(runtime.RepoPath, runtime.ContentDir, normalizedPath) == "" {
+		ErrorBadRequest(c, "Invalid path")
+		return
+	}
+
+	unlock := services.LockRepositoryOperation(runtime)
+	defer unlock()
+
+	if err := invalidateLocalPreviewArticleURL(runtime, normalizedPath); err != nil {
+		slog.Warn("Failed to prepare Local Live Preview metadata before article reset", "site", runtime.ID, "path", normalizedPath, "error", err)
+	}
+
+	result, err := services.ResetArticleToHEADForRuntime(runtime, normalizedPath)
+	if err != nil {
+		if errors.Is(err, services.ErrInvalidArticleResetPath) {
+			ErrorBadRequest(c, err.Error())
+		} else {
+			ErrorInternal(c, "Reset failed: "+err.Error())
+		}
+		return
+	}
+
+	services.UpdateCacheForRuntime(runtime, normalizedPath)
+	localPreviewSync := true
+	resourcePath := filepath.ToSlash(filepath.Join(runtime.ContentDir, normalizedPath))
+	if err := syncLocalPreviewContentResourceForMutation(runtime, resourcePath, result.Deleted, true); err != nil {
+		localPreviewSync = false
+	}
+
+	status := "restored"
+	if result.Deleted {
+		status = "deleted"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":             status,
+		"deleted":            result.Deleted,
+		"revision":           result.Revision,
+		"local_preview_sync": localPreviewSync,
+	})
+}
+
 func DeleteArticle(c *gin.Context) {
 	runtime, err := requestedRuntime(c)
 	if err != nil {

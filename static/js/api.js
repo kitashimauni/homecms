@@ -177,6 +177,21 @@ export async function deleteArticle(path, baseRevision = "") {
 	return await res.json();
 }
 
+export async function resetArticle(path, siteID = currentSite) {
+    await ensureCSRFToken();
+    const res = await fetch(withSite('/admin/api/article/reset', siteID), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...siteHeaders(siteID),
+            ...getCSRFHeaders()
+        },
+        body: JSON.stringify({ path })
+    });
+    if (!res.ok) throw await responseError(res, "Reset failed");
+    return await res.json();
+}
+
 export async function getDiff(payload) {
     await ensureCSRFToken();
     const res = await fetch(withSite('/admin/api/diff'), {

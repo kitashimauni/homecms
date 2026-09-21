@@ -50,6 +50,7 @@ X-CMS-Site: techblog
 
 - `/admin/api/articles`
 - `/admin/api/article`
+- `/admin/api/article/reset`
 - `/admin/api/create`
 - `/admin/api/delete`
 - `/admin/api/diff`
@@ -195,6 +196,29 @@ CSRFトークンを取得します。
     "current_revision": "sha256:..."
 }
 ```
+
+### POST /admin/api/article/reset
+
+現在の記事の未Publish変更を、リモート取得なしでローカルGit `HEAD` の状態へ戻します。対象は指定した記事Markdownだけで、Article Mediaなど同じbundle内の別ファイルは変更しません。`HEAD` に存在しない新規記事は削除します。
+
+**リクエストボディ**:
+```json
+{
+    "path": "posts/2026-01-10-hello/index.md"
+}
+```
+
+**レスポンス**:
+```json
+{
+    "status": "restored",
+    "deleted": false,
+    "revision": "sha256:...",
+    "local_preview_sync": true
+}
+```
+
+新規記事を削除した場合は `status` が `deleted`、`deleted` が `true` になります。Local Live Previewの同期に失敗しても記事のReset自体は成功し、`local_preview_sync` が `false` になります。
 
 ### POST /admin/api/create
 

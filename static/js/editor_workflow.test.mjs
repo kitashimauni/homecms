@@ -18,6 +18,7 @@ const {
     loadFile,
     prepareForGitSync,
     refreshLocalLivePreview,
+    resetChanges,
     runGitMutation,
     setArticlePathChangeListener,
     setConfig,
@@ -93,7 +94,7 @@ describe("Local Preview destructive operations", () => {
         }
     });
 
-    function createArticleSwitchHarness({ generator = "hugo", previewFailure = null, saveFailure = false, saveResponse = null, articleResponses = new Map(), markdownResponses = new Map(), localPreviewResponses = new Map() } = {}) {
+    function createArticleSwitchHarness({ generator = "hugo", previewFailure = null, saveFailure = false, saveResponse = null, resetResponse = null, articleResponses = new Map(), markdownResponses = new Map(), localPreviewResponses = new Map() } = {}) {
         const previousDocument = globalThis.document;
         const previousFetch = globalThis.fetch;
         const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
@@ -184,6 +185,10 @@ describe("Local Preview destructive operations", () => {
                 }
                 return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
             }
+            if (requestURL.includes("/admin/api/article/reset") && options.method === "POST") {
+                if (resetResponse) return resetResponse();
+                return { ok: true, status: 200, json: async () => ({ status: "restored", deleted: false, local_preview_sync: true }) };
+            }
             if (requestURL.endsWith("/admin/api/article") && options.method === "POST") {
                 if (saveResponse) return saveResponse();
                 if (saveFailure) {
@@ -210,6 +215,64 @@ describe("Local Preview destructive operations", () => {
             },
         };
     }
+
+    it("resets an autosaved article to HEAD and resynchronizes its preview", async () => {
+        const previousConfirm = globalThis.confirm;
+        const previousMarkDeploymentPreviewStale = window.markDeploymentPreviewStale;
+        const harness = createArticleSwitchHarness();
+        let staleMarkCount = 0;
+        globalThis.confirm = () => true;
+        window.markDeploymentPreviewStale = () => { staleMarkCount += 1; };
+        try {
+            await loadFile("posts/old.md");
+            harness.editor.value = "autosaved local change";
+            await execAutoSave();
+            harness.editor.value = "newer unsaved change";
+            harness.calls.length = 0;
+
+            await resetChanges();
+
+            assert.equal(harness.editor.value, "before");
+            assert.equal(getCurrentPath(), "posts/old.md");
+            assert.equal(hasUnsavedChanges(), false);
+            assert.equal(staleMarkCount, 1);
+            const resetCall = harness.calls.find(call => call.url.includes("/admin/api/article/reset"));
+            assert.ok(resetCall, "Reset API should be called");
+            assert.deepEqual(JSON.parse(resetCall.options.body), { path: "posts/old.md" });
+            assert.ok(harness.calls.some(call => call.url.includes("/admin/api/preview/local")), "Local Preview should be resynchronized");
+        } finally {
+            globalThis.confirm = previousConfirm;
+            window.markDeploymentPreviewStale = previousMarkDeploymentPreviewStale;
+            harness.restore();
+        }
+    });
+
+    it("keeps the editor content when Reset fails", async () => {
+        const previousConfirm = globalThis.confirm;
+        const harness = createArticleSwitchHarness({
+            resetResponse: () => ({
+                ok: false,
+                status: 500,
+                json: async () => ({ message: "reset failed" }),
+            }),
+        });
+        globalThis.confirm = () => true;
+        try {
+            await loadFile("posts/old.md");
+            harness.editor.value = "unsaved local content";
+            harness.calls.length = 0;
+
+            await resetChanges();
+
+            assert.equal(harness.editor.value, "unsaved local content");
+            assert.equal(getCurrentPath(), "posts/old.md");
+            assert.equal(hasUnsavedChanges(), true);
+            assert.equal(harness.calls.filter(call => call.url.includes("/admin/api/article?" )).length, 0);
+        } finally {
+            globalThis.confirm = previousConfirm;
+            harness.restore();
+        }
+    });
 
     function deferred() {
         let resolve;

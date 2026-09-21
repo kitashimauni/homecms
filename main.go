@@ -123,6 +123,7 @@ func SetupRouter() (*gin.Engine, error) {
 				api.GET("/articles", handlers.ListArticles)
 				api.GET("/article", handlers.GetArticle)
 				api.POST("/article", handlers.SaveArticle)
+				api.POST("/article/reset", handlers.ResetArticle)
 				api.POST("/create", handlers.CreateArticle)
 				api.POST("/delete", handlers.DeleteArticle)
 				api.POST("/diff", handlers.GetDiff)
